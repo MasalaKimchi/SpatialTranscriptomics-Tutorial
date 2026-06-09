@@ -1,0 +1,5 @@
+# This folder holds downloaded and processed data.
+# Subfolders (created automatically by the notebooks):
+#   data/raw/        raw downloaded dataset files / squidpy cache copies
+#   data/processed/  intermediate AnnData (.h5ad) caches
+# These are git-ignored; the notebooks regenerate them on demand.
