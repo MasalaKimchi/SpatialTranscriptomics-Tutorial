@@ -58,6 +58,20 @@ def outputs_dir() -> Path:
     return d
 
 
+def figures_dir() -> Path:
+    """Return ``<root>/outputs/figures`` (created if missing). Holds gallery PNGs."""
+    d = outputs_dir() / "figures"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def save_fig(fig, filename: str, dpi: int = 150) -> Path:
+    """Save a matplotlib figure to ``outputs/figures/<filename>`` and return the path."""
+    path = figures_dir() / filename
+    fig.savefig(path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Reproducibility
 # ---------------------------------------------------------------------------

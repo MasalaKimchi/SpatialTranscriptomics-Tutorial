@@ -2,7 +2,10 @@
 data/raw/
 data/processed/
 data/cache/
-outputs/
+outputs/*
+!outputs/figures/
+outputs/figures/*
+!outputs/figures/*.png
 *.h5ad
 
 # Jupyter

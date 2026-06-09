@@ -61,6 +61,42 @@ Each notebook follows the same structure: **Learning objectives -> Concepts ->
 Code -> Expected outputs -> Common pitfalls -> Interpretation -> "What this means
 biologically"**.
 
+Several notebooks include **"Your turn" exercises** (expandable answer blocks) and
+save key plots to `outputs/figures/` for quick reference.
+
+---
+
+## Figure gallery
+
+Canonical plots are saved under [`outputs/figures/`](outputs/figures/) so you can
+preview results without opening large notebooks. Regenerate anytime after running
+the pipeline:
+
+```bash
+conda activate spatial-tx
+python scripts/generate_gallery_figures.py
+```
+
+| Figure | Notebook | What it shows |
+|--------|----------|---------------|
+| ![Visium workflow](outputs/figures/00_visium_assay.png) | 00 | Visium assay steps |
+| ![AnnData schema](outputs/figures/00_anndata_schema.png) | 00 | AnnData container layout |
+| ![Registration](outputs/figures/03_registration_misaligned_vs_aligned.png) | 03 | Wrong vs correct spot overlay |
+| ![QC histograms](outputs/figures/04_qc_histograms.png) | 04 | Counts, genes, mito % distributions |
+| ![Spatial QC](outputs/figures/04_spatial_qc.png) | 04 | QC metrics on tissue |
+| ![H&E overview](outputs/figures/05_he_overview.png) | 05 | High- and low-res H&E |
+| ![Marker spatial](outputs/figures/06_marker_spatial.png) | 06 | Marker genes on tissue |
+| ![Marker dotplot](outputs/figures/06_marker_dotplot.png) | 06 | Marker expression by depth bin |
+| ![UMAP clusters](outputs/figures/07_umap_clusters.png) | 07 | Leiden clusters (UMAP) |
+| ![Spatial clusters](outputs/figures/07_spatial_clusters.png) | 07 | Leiden clusters on H&E |
+| ![Cluster markers](outputs/figures/07_cluster_markers_dotplot.png) | 07 | Top markers per cluster |
+| ![Top cluster markers](outputs/figures/07_top_cluster_markers_spatial.png) | 07 | #1 marker per major cluster |
+| ![Moran rank](outputs/figures/08_moran_rank.png) | 08 | Top spatially variable genes |
+| ![HVG not SVG](outputs/figures/08_hvg_not_svg_counterexample.png) | 08 | High-variance, low spatial structure |
+| ![Spot patches](outputs/figures/09_spot_patch_montage.png) | 09 | Example per-spot image patches |
+| ![Feature correlation](outputs/figures/10_feature_correlation.png) | 10 | Histology vs expression correlation |
+| ![Module scores](outputs/figures/11_module_scores_violin.png) | 11 | Cell-program scores by cluster |
+
 ---
 
 ## Setup
@@ -87,7 +123,8 @@ jupyter lab
 ```
 
 Then open the notebooks in order, starting with `00_overview_spatial_transcriptomics.ipynb`.
-Notebook `01` includes a version-check cell to confirm the install.
+All notebooks are pinned to the **`Python (spatial-tx)`** kernel — Jupyter should select it
+automatically. Notebook `01` includes a version-check cell to confirm the install.
 
 ---
 
@@ -97,10 +134,12 @@ Notebook `01` includes a version-check cell to confirm the install.
 .
 ├── 00_..12_*.ipynb        # the tutorial notebooks
 ├── utils/st_helpers.py    # shared helpers (paths, seeds, dataset loading, gene checks)
+├── scripts/               # patch_notebooks.py, generate_gallery_figures.py
 ├── data/                  # downloaded + processed data (git-ignored)
 │   ├── raw/
 │   └── processed/         # *.h5ad caches
-├── outputs/               # CSVs + figures (git-ignored)
+├── outputs/               # CSVs (git-ignored)
+│   └── figures/           # gallery PNGs (committed for README preview)
 ├── requirements.txt
 ├── environment.yml
 └── README.md
