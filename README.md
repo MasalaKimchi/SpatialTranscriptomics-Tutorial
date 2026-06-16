@@ -135,6 +135,8 @@ automatically. Notebook `01` includes a version-check cell to confirm the instal
 ├── 00_..12_*.ipynb        # the tutorial notebooks
 ├── utils/st_helpers.py    # shared helpers (paths, seeds, dataset loading, gene checks)
 ├── scripts/               # patch_notebooks.py, generate_gallery_figures.py
+├── projects/
+│   └── spatial-pharma-dl/ # pharma DL extension (CNN, LOSO validation)
 ├── data/                  # downloaded + processed data (git-ignored)
 │   ├── raw/
 │   └── processed/         # *.h5ad caches
@@ -217,3 +219,22 @@ Methods* (2022). Scanpy: Wolf et al., *Genome Biology* (2018). AnnData: Virshup
 et al. (2021).
 
 This tutorial uses only public data and requires no paid or private credentials.
+
+---
+
+## Spatial Pharma DL (extension project)
+
+A pharma-facing subproject predicts **tumor microenvironment molecular state from H&E
+patches** using a simple ResNet18 CNN, with leave-one-slide-out validation on public
+human breast Visium data.
+
+See [`projects/spatial-pharma-dl/`](projects/spatial-pharma-dl/) for:
+
+- 6-phase notebook pipeline (`01_data_curation` → `06_interpretability`)
+- Multi-slide oncology cohort + external tumor validation
+- CNN vs Random Forest benchmark (extends notebook 10)
+
+```bash
+pip install -r requirements.txt -r projects/spatial-pharma-dl/requirements-pharma.txt
+jupyter lab projects/spatial-pharma-dl/notebooks/
+```

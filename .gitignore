@@ -6,6 +6,8 @@ outputs/*
 !outputs/figures/
 outputs/figures/*
 !outputs/figures/*.png
+outputs/pharma/
+data/processed/pharma/
 *.h5ad
 
 # Jupyter

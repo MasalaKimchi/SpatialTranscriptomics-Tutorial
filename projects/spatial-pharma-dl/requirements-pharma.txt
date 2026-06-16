@@ -1,0 +1,7 @@
+# Spatial Pharma DL — additional dependencies (install on top of base tutorial env)
+# pip install -r requirements.txt -r projects/spatial-pharma-dl/requirements-pharma.txt
+
+torch>=2.0
+torchvision>=0.15
+pyyaml>=6.0
+pyarrow>=12.0

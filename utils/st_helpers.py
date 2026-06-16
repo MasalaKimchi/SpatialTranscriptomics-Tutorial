@@ -123,6 +123,29 @@ def load_dataset(name: str = "visium_hne"):
     return sq.datasets.visium_hne_adata()
 
 
+def load_visium_sample(sample_id: str):
+    """Load any public 10x Visium slide by sample_id via squidpy.
+
+    Parameters
+    ----------
+    sample_id
+        e.g. ``'V1_Breast_Cancer_Block_A_Section_1'`` or ``'visium_hne'`` for the
+        tutorial mouse-brain sample.
+
+    Returns
+    -------
+    AnnData
+        Visium object with spatial image and coordinates attached.
+    """
+    import squidpy as sq
+
+    if sample_id == "visium_hne":
+        return load_dataset("visium_hne")
+    adata = sq.datasets.visium(sample_id)
+    adata.var_names_make_unique()
+    return adata
+
+
 def get_library_id(adata) -> str:
     """Return the (single) Visium library id stored in ``adata.uns['spatial']``."""
     if "spatial" not in adata.uns or not adata.uns["spatial"]:
