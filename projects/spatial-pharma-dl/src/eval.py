@@ -19,31 +19,28 @@ from sklearn.metrics import (
 )
 from scipy.stats import pearsonr
 
-from .data import load_config, pharma_outputs_dir
+from .data import pharma_outputs_dir
+from .device import resolve_device
 from .labels import gene_columns
-from .models import build_model
-from .patches import patch_features, load_patch_arrays
-
-
-def _imagenet_normalize(x: torch.Tensor) -> torch.Tensor:
-    mean = torch.tensor([0.485, 0.456, 0.406], device=x.device).view(1, 3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
-    return (x - mean) / std
+from .models import get_gradcam_layer
+from .patches import patch_features
+from .transforms import imagenet_normalize
 
 
 @torch.no_grad()
 def predict_cnn(
     model: torch.nn.Module,
     patches: np.ndarray,
-    device: str = "cpu",
+    device: str | None = None,
     batch_size: int = 64,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run CNN inference; return (cls_logits, reg_preds)."""
+    dev = resolve_device(device or "auto")
     model.eval()
     all_cls, all_reg = [], []
     for i in range(0, len(patches), batch_size):
-        batch = torch.from_numpy(patches[i : i + batch_size]).to(device)
-        batch = _imagenet_normalize(batch)
+        batch = torch.from_numpy(patches[i : i + batch_size]).to(dev)
+        batch = imagenet_normalize(batch)
         pred_cls, pred_reg = model(batch)
         all_cls.append(pred_cls.cpu().numpy())
         all_reg.append(pred_reg.cpu().numpy())
@@ -63,15 +60,20 @@ def regression_metrics(
 ) -> pd.DataFrame:
     rows = []
     for j, gene in enumerate(gene_names):
-        yt, yp = y_true[:, j], y_pred[:, j]
-        if np.std(yt) < 1e-8:
+        yt, yp = y_true[:, j].astype(np.float64), y_pred[:, j].astype(np.float64)
+        mask = np.isfinite(yt) & np.isfinite(yp)
+        if mask.sum() < 3 or np.std(yt[mask]) < 1e-8:
             continue
+        yt, yp = yt[mask], yp[mask]
         r, _ = pearsonr(yt, yp)
+        if not np.isfinite(r):
+            continue
+        r2 = r2_score(yt, yp) if np.all(np.isfinite(yp)) else float("nan")
         rows.append(
             {
                 "gene": gene.replace("gene_", ""),
                 "pearson_r": float(r),
-                "r2": float(r2_score(yt, yp)),
+                "r2": float(r2) if np.isfinite(r2) else 0.0,
                 "mae": float(np.abs(yt - yp).mean()),
             }
         )
@@ -81,7 +83,9 @@ def regression_metrics(
 def evaluate_fold(result: dict[str, Any]) -> dict[str, Any]:
     """Evaluate one LOSO fold from train_one_fold output."""
     model = result["model"]
-    device = result["device"]
+    # Inference on CPU avoids MPS NaNs on some torchvision ops.
+    device = "cpu"
+    model = model.to(device)
     X_val = result["X_val"]
     lab_val = result["lab_val"]
     gene_cols = result["gene_cols"]
@@ -139,12 +143,16 @@ def train_eval_rf_baseline(
     y_cls_pred = clf.predict(X_val)
     cls_metrics = classification_metrics(y_cls_val, y_cls_pred)
 
-    y_reg_train = train_labels[gene_cols].to_numpy()
-    y_reg_val = val_labels[gene_cols].to_numpy()
-    reg_preds = np.zeros_like(y_reg_val)
+    y_reg_train = train_labels[gene_cols].to_numpy(dtype=np.float64)
+    y_reg_val = val_labels[gene_cols].to_numpy(dtype=np.float64)
+    reg_preds = np.full_like(y_reg_val, np.nan)
     for j in range(len(gene_cols)):
+        yt = y_reg_train[:, j]
+        yv = y_reg_val[:, j]
+        if not np.isfinite(yt).all() or np.nanstd(yt) < 1e-8:
+            continue
         reg = RandomForestRegressor(n_estimators=300, random_state=seed, n_jobs=-1)
-        reg.fit(X_train, y_reg_train[:, j])
+        reg.fit(X_train, np.nan_to_num(yt, nan=np.nanmean(yt)))
         reg_preds[:, j] = reg.predict(X_val)
 
     reg_df = regression_metrics(y_reg_val, reg_preds, gene_cols)
@@ -157,7 +165,7 @@ def train_eval_rf_baseline(
 
 
 class GradCAM:
-    """Grad-CAM for ResNet18 conv layer (layer4)."""
+    """Grad-CAM on the backbone's target convolutional layer."""
 
     def __init__(self, model: torch.nn.Module, target_layer: torch.nn.Module):
         self.model = model
@@ -195,14 +203,14 @@ def grad_cam_for_patch(
     model: torch.nn.Module,
     patch_chw: np.ndarray,
     target_class: int | None = None,
-    device: str = "cpu",
+    device: str | None = None,
 ) -> np.ndarray:
     """Compute Grad-CAM heatmap for a single patch."""
+    dev = resolve_device(device or "auto")
     model.eval()
-    x = torch.from_numpy(patch_chw).unsqueeze(0).to(device)
-    x = _imagenet_normalize(x)
-    target_layer = model.features[-1][-1].conv2  # last conv in layer4
-    cam = GradCAM(model, target_layer)
+    x = torch.from_numpy(patch_chw).unsqueeze(0).to(dev)
+    x = imagenet_normalize(x)
+    cam = GradCAM(model, get_gradcam_layer(model))
     return cam(x, target_class)
 
 

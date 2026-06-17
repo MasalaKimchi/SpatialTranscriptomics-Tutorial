@@ -58,6 +58,32 @@ def outputs_dir() -> Path:
     return d
 
 
+def setup_pharma_paths(start: Path | None = None) -> tuple[Path, Path]:
+    """Locate repo + pharma subproject and add both to ``sys.path``.
+
+    Used by pharma notebooks and scripts so imports resolve as
+    ``from utils import st_helpers`` and ``from src.data import ...``.
+    """
+    import sys
+
+    root = (start or Path.cwd()).resolve()
+    for _ in range(8):
+        if (root / "utils").is_dir():
+            break
+        if root.parent == root:
+            raise FileNotFoundError(
+                "Could not find repository root (no utils/ directory while walking up)."
+            )
+        root = root.parent
+
+    pharma = root / "projects" / "spatial-pharma-dl"
+    for path in (root, pharma):
+        entry = str(path)
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+    return root, pharma
+
+
 def figures_dir() -> Path:
     """Return ``<root>/outputs/figures`` (created if missing). Holds gallery PNGs."""
     d = outputs_dir() / "figures"

@@ -9,19 +9,9 @@ from pathlib import Path
 NB_DIR = Path(__file__).resolve().parent.parent / "notebooks"
 KERNEL = {"display_name": "spatial-tx", "language": "python", "name": "spatial-tx"}
 
-SETUP = """import sys
-from pathlib import Path
+SETUP = """from utils import st_helpers as st
 
-ROOT = Path.cwd()
-for _ in range(5):
-    if (ROOT / 'utils').exists():
-        break
-    ROOT = ROOT.parent
-PHARMA = ROOT / 'projects' / 'spatial-pharma-dl'
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(PHARMA))
-
-from utils import st_helpers as st
+ROOT, PHARMA = st.setup_pharma_paths()
 st.set_seeds()
 print('ROOT:', ROOT)
 print('PHARMA:', PHARMA)
@@ -58,10 +48,10 @@ NOTEBOOKS = {
     "01_data_curation.ipynb": [
         md("# 01 — Data Curation and Cohort QC\n\nDownload public Visium oncology slides and run tutorial-equivalent QC + Leiden clustering per slide."),
         code(SETUP),
-        code("""from src.data import load_config, preprocess_cohort, cohort_summary, pharma_outputs_dir
+        code("""from src.data import load_config, cohort_slide_ids, preprocess_cohort, cohort_summary, pharma_outputs_dir
 
 cfg = load_config()
-all_slides = cfg['cohorts']['oncology'] + cfg['cohorts']['external'] + cfg['cohorts']['benchmark']
+all_slides = cohort_slide_ids(cfg)
 print('Slides to process:', len(all_slides))
 for s in all_slides:
     print(' ', s)
@@ -177,48 +167,22 @@ pd.DataFrame(rows).to_csv(pharma_outputs_dir() / 'training_history.csv', index=F
     "05_evaluation.ipynb": [
         md("# 05 — Evaluation and RF Benchmark\n\nCNN vs Random Forest with slide-level metrics."),
         code(SETUP),
-        code("""import numpy as np
-import pandas as pd
-from src.data import load_config
+        code("""import pandas as pd
+from src.data import load_config, cohort_slide_ids
 from src.labels import build_labels_cohort
-from src.train import train_loso, loso_folds, _load_slide_data
-from src.eval import evaluate_fold, train_eval_rf_baseline, save_benchmark_report
+from src.benchmark import run_and_save_benchmark
 
 cfg = load_config()
 oncology = cfg['cohorts']['oncology']
-external = cfg['cohorts']['external']
-labels = build_labels_cohort(oncology + external + cfg['cohorts']['benchmark'], cfg=cfg)
+labels = build_labels_cohort(cohort_slide_ids(cfg), cfg=cfg)
 breast_labels = labels[labels['slide_id'].isin(oncology)]
-"""),
-        code("""results = train_loso(oncology, breast_labels, cfg=cfg)
-benchmark_rows = []
-for r in results:
-    ev = evaluate_fold(r)
-    benchmark_rows.append({
-        'model': 'cnn', 'fold': ev['fold'], 'val_slide': ev['val_slide'],
-        'balanced_accuracy': ev['balanced_accuracy'], 'macro_f1': ev['macro_f1'],
-        'mean_pearson_r': ev['mean_pearson_r'], 'mean_r2': ev['mean_r2'],
-    })
-"""),
-        code("""for fold, (train_slides, val_slide) in enumerate(loso_folds(oncology)):
-    train_p, train_l = [], []
-    for sid in train_slides:
-        p, lab = _load_slide_data(sid, breast_labels)
-        train_p.append(p); train_l.append(lab)
-    val_p, val_l = _load_slide_data(val_slide, breast_labels)
-    rf = train_eval_rf_baseline(np.concatenate(train_p), pd.concat(train_l), val_p, val_l, seed=0)
-    benchmark_rows.append({
-        'model': 'rf', 'fold': fold, 'val_slide': val_slide,
-        'balanced_accuracy': rf['balanced_accuracy'], 'macro_f1': rf['macro_f1'],
-        'mean_pearson_r': rf['mean_pearson_r'], 'mean_r2': rf['mean_r2'],
-    })
-save_benchmark_report(benchmark_rows)
-pd.read_csv(pharma_outputs_dir() / 'benchmark_report.csv')
+report_path, results = run_and_save_benchmark(oncology, breast_labels, cfg=cfg)
+pd.read_csv(report_path)
 """),
         code("""from src.eval import predict_cnn
 from src.patches import load_patch_arrays
 
-for sid in external:
+for sid in cfg['cohorts']['external']:
     try:
         patches, _ = load_patch_arrays(sid)
         predict_cnn(results[-1]['model'], patches[:50], device=results[-1]['device'])
@@ -234,14 +198,14 @@ for sid in external:
         code("""import matplotlib.pyplot as plt
 import numpy as np
 import squidpy as sq
-from src.data import load_config, pharma_outputs_dir, load_slide
+from src.data import load_config, cohort_slide_ids, pharma_outputs_dir, load_slide
 from src.labels import build_labels_cohort
 from src.train import train_loso
 from src.eval import grad_cam_for_patch, evaluate_fold
 
 cfg = load_config()
 oncology = cfg['cohorts']['oncology']
-labels = build_labels_cohort(oncology + cfg['cohorts']['external'], cfg=cfg)
+labels = build_labels_cohort(cohort_slide_ids(cfg), cfg=cfg)
 breast_labels = labels[labels['slide_id'].isin(oncology)]
 results = train_loso(oncology, breast_labels, cfg=cfg)
 ev = evaluate_fold(results[0])

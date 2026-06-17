@@ -14,17 +14,11 @@ from skimage.filters.rank import entropy as rank_entropy
 from skimage.morphology import disk
 from skimage.transform import resize
 from skimage.util import img_as_ubyte
-from tqdm import tqdm
 
-import sys
+from . import bootstrap  # noqa: F401
+from utils import st_helpers as st
 
-ROOT = Path(__file__).resolve().parents[3]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from utils import st_helpers as st  # noqa: E402
-
-from .data import load_config, pharma_processed_dir, safe_filename  # noqa: E402
+from .data import load_config, pharma_processed_dir, safe_filename
 
 
 def patch_size_px(adata, min_patch: int = 8) -> tuple[int, int]:
@@ -135,42 +129,29 @@ def patch_features(patch: np.ndarray) -> dict[str, float]:
     return feats
 
 
-def build_patch_index(
+def _extract_spot_patches(
     adata,
     slide_id: str,
-    ref_stain: np.ndarray | None = None,
-    cfg: dict[str, Any] | None = None,
-) -> pd.DataFrame:
-    """Extract all spot patches and build index DataFrame."""
-    cfg = cfg or load_config()
+    ref_stain: np.ndarray,
+    cfg: dict[str, Any],
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Extract normalized, resized patches for all spots on a slide."""
     min_patch = cfg["patches"]["min_patch_px"]
     out_size = cfg["patches"]["output_size"]
-
     img = st.get_image(adata, "hires")
-    patch_px, half = patch_size_px(adata, min_patch)
+    _, half = patch_size_px(adata, min_patch)
     coords = coords_hires(adata)
 
-    if ref_stain is None:
-        ref_stain = stain_matrix_macenko(img)
-
-    rows = []
-    for i, (x, y) in enumerate(tqdm(coords, desc=f"patches {slide_id[:20]}")):
+    patches, meta_rows = [], []
+    for i, (x, y) in enumerate(coords):
         raw = extract_patch(img, x, y, half)
         norm = macenko_normalize(raw, ref_stain)
         resized = resize_patch(norm, out_size)
-        spot_id = adata.obs_names[i]
-        rows.append(
-            {
-                "slide_id": slide_id,
-                "spot_id": spot_id,
-                "x": float(x),
-                "y": float(y),
-                "patch_px": patch_px,
-            }
+        patches.append(patch_to_tensor(resized))
+        meta_rows.append(
+            {"slide_id": slide_id, "spot_id": adata.obs_names[i], "x": float(x), "y": float(y)}
         )
-        # Store resized patch as bytes path alternative: save to npz later in dataset
-        adata.obsm.setdefault("_patch_cache", {})
-    return pd.DataFrame(rows)
+    return np.stack(patches, axis=0), pd.DataFrame(meta_rows)
 
 
 def extract_all_patches_for_slide(
@@ -180,30 +161,7 @@ def extract_all_patches_for_slide(
     cfg: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Return (N, 3, H, W) float32 tensor array and metadata DataFrame."""
-    cfg = cfg or load_config()
-    min_patch = cfg["patches"]["min_patch_px"]
-    out_size = cfg["patches"]["output_size"]
-
-    img = st.get_image(adata, "hires")
-    _, half = patch_size_px(adata, min_patch)
-    coords = coords_hires(adata)
-
-    patches = []
-    meta_rows = []
-    for i, (x, y) in enumerate(coords):
-        raw = extract_patch(img, x, y, half)
-        norm = macenko_normalize(raw, ref_stain)
-        resized = resize_patch(norm, out_size)
-        patches.append(patch_to_tensor(resized))
-        meta_rows.append(
-            {
-                "slide_id": slide_id,
-                "spot_id": adata.obs_names[i],
-                "x": float(x),
-                "y": float(y),
-            }
-        )
-    return np.stack(patches, axis=0), pd.DataFrame(meta_rows)
+    return _extract_spot_patches(adata, slide_id, ref_stain, cfg or load_config())
 
 
 def fit_reference_stain(sample_ids: list[str], cfg: dict[str, Any] | None = None) -> np.ndarray:

@@ -6,41 +6,28 @@ import re
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import scanpy as sc
-import squidpy as sq
 import yaml
 
-import sys
+from . import bootstrap  # noqa: F401 — ensures repo root is on sys.path
+from utils import st_helpers as st
 
-ROOT = Path(__file__).resolve().parents[3]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from utils import st_helpers as st  # noqa: E402
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
-
-ONCOLOGY_COHORT = [
-    "V1_Breast_Cancer_Block_A_Section_1",
-    "V1_Breast_Cancer_Block_A_Section_2",
-    "Visium_FFPE_Human_Breast_Cancer",
-    "Parent_Visium_Human_BreastCancer",
-]
-EXTERNAL_COHORT = [
-    "Parent_Visium_Human_ColorectalCancer",
-    "Parent_Visium_Human_OvarianCancer",
-    "Targeted_Visium_Human_Glioblastoma_Pan_Cancer",
-]
-BENCHMARK_COHORT = ["visium_hne"]
 
 
 def load_config(path: Path | None = None) -> dict[str, Any]:
     """Load YAML config from configs/default.yaml."""
-    cfg_path = path or CONFIG_PATH
-    with open(cfg_path) as f:
+    with open(path or CONFIG_PATH) as f:
         return yaml.safe_load(f)
+
+
+def cohort_slide_ids(cfg: dict[str, Any] | None = None) -> list[str]:
+    """Return all slide ids across oncology, external, and benchmark cohorts."""
+    cfg = cfg or load_config()
+    cohorts = cfg["cohorts"]
+    return cohorts["oncology"] + cohorts["external"] + cohorts["benchmark"]
 
 
 def pharma_processed_dir() -> Path:
@@ -59,15 +46,6 @@ def pharma_outputs_dir() -> Path:
 
 def safe_filename(sample_id: str) -> str:
     return re.sub(r"[^\w\-]", "_", sample_id)
-
-
-def load_visium_sample(sample_id: str):
-    """Load a Visium AnnData by sample_id via squidpy."""
-    if sample_id == "visium_hne":
-        return st.load_dataset("visium_hne")
-    adata = sq.datasets.visium(sample_id)
-    adata.var_names_make_unique()
-    return adata
 
 
 def _mito_prefix(adata) -> str:
@@ -157,12 +135,7 @@ def preprocess_cohort(
 ) -> dict[str, Path]:
     """Download and preprocess all slides in sample_ids."""
     cfg = cfg or load_config()
-    if sample_ids is None:
-        sample_ids = (
-            cfg["cohorts"]["oncology"]
-            + cfg["cohorts"]["external"]
-            + cfg["cohorts"]["benchmark"]
-        )
+    sample_ids = sample_ids or cohort_slide_ids(cfg)
     paths = {}
     for sid in sample_ids:
         out = pharma_processed_dir() / f"{safe_filename(sid)}_clustered.h5ad"
@@ -170,22 +143,19 @@ def preprocess_cohort(
             paths[sid] = out
             continue
         print(f"Loading and preprocessing: {sid}")
-        adata = load_visium_sample(sid)
+        adata = st.load_visium_sample(sid)
         adata = preprocess_slide(adata, sid, cfg=cfg)
         paths[sid] = save_slide(adata, sid)
-        print(f"  -> {out} ({adata.n_obs} spots, {adata.obs['clusters'].nunique()} clusters)")
+        print(
+            f"  -> {out} ({adata.n_obs} spots, "
+            f"{adata.obs['clusters'].nunique()} clusters)"
+        )
     return paths
 
 
 def cohort_summary(sample_ids: list[str] | None = None) -> pd.DataFrame:
     """Build summary table for processed slides."""
-    cfg = load_config()
-    if sample_ids is None:
-        sample_ids = (
-            cfg["cohorts"]["oncology"]
-            + cfg["cohorts"]["external"]
-            + cfg["cohorts"]["benchmark"]
-        )
+    sample_ids = sample_ids or cohort_slide_ids()
     rows = []
     for sid in sample_ids:
         try:

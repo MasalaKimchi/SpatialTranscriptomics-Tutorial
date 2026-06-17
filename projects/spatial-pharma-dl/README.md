@@ -16,13 +16,29 @@ pip install -r requirements.txt -r projects/spatial-pharma-dl/requirements-pharm
 jupyter lab projects/spatial-pharma-dl/notebooks/
 ```
 
-Or use the Python modules directly:
+Or run the full pipeline from the command line:
 
 ```bash
+# Full run (downloads ~8 Visium slides on first use; CNN training 30+ min on GPU)
+python projects/spatial-pharma-dl/scripts/run_pipeline.py
+
+# Resume training only (after phases 1–3 are cached)
+PHARMA_TRAIN_ONLY=1 python projects/spatial-pharma-dl/scripts/run_pipeline.py
+
+# Fast smoke test (500 spots/fold, 2 epochs)
+PHARMA_QUICK=1 PHARMA_TRAIN_ONLY=1 python projects/spatial-pharma-dl/scripts/run_pipeline.py
+```
+
+`KMP_DUPLICATE_LIB_OK=TRUE` is set automatically via `src/bootstrap.py` on macOS.
+
+Or inspect modules directly:
+
+```bash
+cd projects/spatial-pharma-dl
 python -c "
-from projects.spatial_pharma_dl.src.data import load_config, preprocess_cohort
+from src.data import load_config, cohort_slide_ids
 cfg = load_config()
-# preprocess_cohort downloads + QC slides (requires network on first run)
+print(cohort_slide_ids(cfg))
 "
 ```
 

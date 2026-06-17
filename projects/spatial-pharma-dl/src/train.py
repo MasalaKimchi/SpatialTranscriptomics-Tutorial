@@ -2,39 +2,31 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import os
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 
 from .data import load_config, pharma_outputs_dir
-from .labels import gene_columns
+from .device import device_label, resolve_device
+from .labels import align_labels_with_patches, gene_columns
 from .models import build_model
 from .patches import SpotPatchDataset, load_patch_arrays
+from .transforms import NormalizedDataset
 
 
-def _imagenet_normalize(x: torch.Tensor) -> torch.Tensor:
-    mean = torch.tensor([0.485, 0.456, 0.406], device=x.device).view(1, 3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
-    return (x - mean) / std
-
-
-class NormalizedDataset(torch.utils.data.Dataset):
-    """Wrap SpotPatchDataset with ImageNet normalization."""
-
-    def __init__(self, base: SpotPatchDataset):
-        self.base = base
-
-    def __len__(self) -> int:
-        return len(self.base)
-
-    def __getitem__(self, idx: int):
-        x, y_cls, y_reg = self.base[idx]
-        return _imagenet_normalize(x), y_cls, y_reg
+def _maybe_subsample(
+    patches: np.ndarray, labels: pd.DataFrame, max_spots: int | None
+) -> tuple[np.ndarray, pd.DataFrame]:
+    if max_spots is None or len(labels) <= max_spots:
+        return patches, labels
+    rng = np.random.default_rng(0)
+    idx = rng.choice(len(labels), size=max_spots, replace=False)
+    return patches[idx], labels.iloc[idx].reset_index(drop=True)
 
 
 def loso_folds(slide_ids: list[str]) -> list[tuple[list[str], str]]:
@@ -42,17 +34,20 @@ def loso_folds(slide_ids: list[str]) -> list[tuple[list[str], str]]:
     return [([s for s in slide_ids if s != v], v) for v in slide_ids]
 
 
-def _load_slide_data(
+def load_slide_patches(
     slide_id: str, labels: pd.DataFrame
 ) -> tuple[np.ndarray, pd.DataFrame]:
+    """Load cached patches aligned with labels for one slide."""
     patches, meta = load_patch_arrays(slide_id)
-    sub = labels[labels["slide_id"] == slide_id].merge(
-        meta, on=["slide_id", "spot_id"]
-    )
-    order = sub["spot_id"].tolist()
+    slide_labels = labels[labels["slide_id"] == slide_id]
+    aligned = align_labels_with_patches(slide_labels, meta)
+    order = aligned["spot_id"].tolist()
     idx_map = {s: i for i, s in enumerate(meta["spot_id"])}
-    indices = [idx_map[s] for s in order]
-    return patches[indices], sub.reset_index(drop=True)
+    return patches[[idx_map[s] for s in order]], aligned.reset_index(drop=True)
+
+
+# Backward-compatible alias for notebooks generated before rename.
+_load_slide_data = load_slide_patches
 
 
 def train_one_fold(
@@ -66,33 +61,36 @@ def train_one_fold(
     """Train one LOSO fold; return metrics and model path."""
     cfg = cfg or load_config()
     train_cfg = cfg["training"]
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    dev = resolve_device(device or train_cfg.get("device", "auto"))
+    device = str(dev)
+    model_name = train_cfg.get("model", "resnet18")
+    pretrained = bool(train_cfg.get("pretrained", True))
+    print(f"  Device: {device_label(dev)} | backbone: {model_name}")
 
     train_patches, train_labels = [], []
     for sid in train_slides:
-        p, lab = _load_slide_data(sid, labels)
-        train_patches.append(p)
+        patches, lab = load_slide_patches(sid, labels)
+        train_patches.append(patches)
         train_labels.append(lab)
-    val_patches, val_labels = _load_slide_data(val_slide, labels)
+    X_val, lab_val = load_slide_patches(val_slide, labels)
 
     X_train = np.concatenate(train_patches, axis=0)
-    X_val = val_patches
     lab_train = pd.concat(train_labels, ignore_index=True)
-    lab_val = val_labels
+
+    quick_max = 500 if os.environ.get("PHARMA_QUICK") else None
+    X_train, lab_train = _maybe_subsample(X_train, lab_train, quick_max)
+    X_val, lab_val = _maybe_subsample(X_val, lab_val, quick_max)
 
     gene_cols = gene_columns(lab_train)
     n_classes = int(lab_train["cluster_id"].nunique())
     n_genes = len(gene_cols)
 
-    # Remap cluster ids to contiguous 0..K-1 for this fold
     uniq = sorted(lab_train["cluster_id"].unique())
     cls_map = {c: i for i, c in enumerate(uniq)}
     lab_train = lab_train.copy()
     lab_val = lab_val.copy()
     lab_train["cluster_id"] = lab_train["cluster_id"].map(cls_map)
-    lab_val["cluster_id"] = lab_val["cluster_id"].map(
-        lambda c: cls_map.get(c, -1)
-    )
+    lab_val["cluster_id"] = lab_val["cluster_id"].map(lambda c: cls_map.get(c, -1))
     val_mask = lab_val["cluster_id"] >= 0
     lab_val = lab_val[val_mask].reset_index(drop=True)
     X_val = X_val[val_mask.to_numpy()]
@@ -116,7 +114,9 @@ def train_one_fold(
         num_workers=train_cfg["num_workers"],
     )
 
-    model = build_model(n_classes, n_genes).to(device)
+    model = build_model(
+        n_classes, n_genes, model_name=model_name, pretrained=pretrained
+    ).to(dev)
     opt = torch.optim.AdamW(
         model.parameters(),
         lr=train_cfg["lr"],
@@ -128,12 +128,13 @@ def train_one_fold(
     best_val_loss = float("inf")
     patience_ctr = 0
     history = []
+    best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
     for epoch in range(train_cfg["epochs"]):
         model.train()
         train_loss = 0.0
         for xb, yc, yr in train_loader:
-            xb, yc, yr = xb.to(device), yc.to(device), yr.to(device)
+            xb, yc, yr = xb.to(dev), yc.to(dev), yr.to(dev)
             opt.zero_grad()
             pred_cls, pred_reg = model(xb)
             loss = (
@@ -149,7 +150,7 @@ def train_one_fold(
         val_loss = 0.0
         with torch.no_grad():
             for xb, yc, yr in val_loader:
-                xb, yc, yr = xb.to(device), yc.to(device), yr.to(device)
+                xb, yc, yr = xb.to(dev), yc.to(dev), yr.to(dev)
                 pred_cls, pred_reg = model(xb)
                 loss = (
                     train_cfg["cls_weight"] * cls_loss_fn(pred_cls, yc)
@@ -171,10 +172,12 @@ def train_one_fold(
     model.load_state_dict(best_state)
     out_dir = pharma_outputs_dir() / "models"
     out_dir.mkdir(parents=True, exist_ok=True)
-    model_path = out_dir / f"resnet18_fold{fold}.pt"
+    model_path = out_dir / f"{model_name}_fold{fold}.pt"
     torch.save(
         {
             "state_dict": model.state_dict(),
+            "model_name": model_name,
+            "pretrained": pretrained,
             "n_classes": n_classes,
             "n_genes": n_genes,
             "gene_cols": gene_cols,
@@ -195,6 +198,7 @@ def train_one_fold(
         "lab_val": lab_val,
         "X_val": X_val,
         "model": model,
+        "model_name": model_name,
         "device": device,
     }
 
@@ -209,6 +213,7 @@ def train_loso(
     results = []
     for fold, (train_slides, val_slide) in enumerate(loso_folds(slide_ids)):
         print(f"Fold {fold}: train={train_slides}, val={val_slide}")
-        res = train_one_fold(train_slides, val_slide, labels, cfg=cfg, fold=fold)
-        results.append(res)
+        results.append(
+            train_one_fold(train_slides, val_slide, labels, cfg=cfg, fold=fold)
+        )
     return results

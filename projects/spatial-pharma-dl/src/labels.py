@@ -2,27 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import scanpy as sc
 
-import sys
+from . import bootstrap  # noqa: F401
+from utils import st_helpers as st
 
-ROOT = Path(__file__).resolve().parents[3]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from utils import st_helpers as st  # noqa: E402
-
-from .data import (  # noqa: E402
-    load_config,
-    load_slide,
-    pharma_outputs_dir,
-    tumor_type_for_slide,
-)
+from .data import load_config, load_slide, pharma_outputs_dir, tumor_type_for_slide
 
 
 DOMAIN_KEYWORDS = {
@@ -60,7 +48,7 @@ def compute_module_scores(adata, cfg: dict[str, Any] | None = None) -> list[str]
 def annotate_domain(cluster_markers: pd.DataFrame) -> dict[str, str]:
     """Assign human-readable domain names from top marker genes per cluster."""
     annotations = {}
-    for cluster, grp in cluster_markers.groupby("group"):
+    for cluster, grp in cluster_markers.groupby("group", observed=True):
         top_genes = grp.nlargest(5, "scores")["names"].tolist()
         scores = {label: 0 for label in DOMAIN_KEYWORDS}
         for gene in top_genes:
@@ -87,7 +75,6 @@ def build_labels_for_slide(
     )
     module_cols = compute_module_scores(adata, cfg)
 
-    # Rank markers for domain annotation
     sc.tl.rank_genes_groups(adata, "clusters", method="wilcoxon", random_state=seed)
     cluster_markers = sc.get.rank_genes_groups_df(adata, group=None)
     domain_map = annotate_domain(cluster_markers)

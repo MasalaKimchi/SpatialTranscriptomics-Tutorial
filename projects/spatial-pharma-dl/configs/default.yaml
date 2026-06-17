@@ -97,7 +97,12 @@ patches:
   output_size: 224
 
 training:
+  # Backbone: resnet18 (default/fast), resnet50, efficientnet_b0,
+  # convnext_tiny, vit_b_16 — all ImageNet-pretrained via torchvision.
   model: resnet18
+  pretrained: true
+  # Device: auto (CUDA → MPS → CPU), or cuda | mps | cpu
+  device: auto
   batch_size: 32
   epochs: 15
   lr: 0.0001
