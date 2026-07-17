@@ -28,6 +28,7 @@ CLASSIFICATION_METRICS = ("balanced_accuracy", "macro_f1", "accuracy")
 REGRESSION_METRICS = ("pearson_r", "r2", "mae")
 
 _MISSING = object()
+_CONCRETE_PATH_TYPE = type(Path())
 _ROOT_KEYS = (
     "seed",
     "experiment",
@@ -321,12 +322,17 @@ class _Issues:
 
 
 def _merge_optional_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
-    merged = dict(raw)
+    # ``raw`` has already passed the exact-dict root gate in ``resolve_config``.
+    # Copy only exact built-in dictionaries here: a Mapping/dict subclass may
+    # override iteration, lookup, membership, or ``__deepcopy__``.
+    if type(raw) is not dict:  # pragma: no cover - resolve_config invariant
+        raise TypeError("configuration root must be an exact built-in dict")
+    merged = raw.copy()
     for key, default in _OPTIONAL_DEFAULTS.items():
         if key not in merged:
             merged[key] = deepcopy(default)
-        elif isinstance(default, Mapping) and isinstance(merged[key], Mapping):
-            section = dict(merged[key])
+        elif type(default) is dict and type(merged[key]) is dict:
+            section = merged[key].copy()
             for nested_key, nested_default in default.items():
                 section.setdefault(nested_key, deepcopy(nested_default))
             merged[key] = section
@@ -339,8 +345,8 @@ def _mapping(
     issues: _Issues,
     *,
     allowed: Sequence[str] | None = None,
-) -> Mapping[str, Any] | None:
-    if not isinstance(value, Mapping):
+) -> dict[str, Any] | None:
+    if type(value) is not dict:
         issues.add(
             path,
             value,
@@ -370,10 +376,10 @@ def _mapping(
                 f"one of {tuple(allowed)}",
                 "Remove the unknown key or correct its spelling.",
             )
-    return value  # type: ignore[return-value]
+    return value
 
 
-def _required(mapping: Mapping[str, Any] | None, key: str, path: str, issues: _Issues):
+def _required(mapping: dict[str, Any] | None, key: str, path: str, issues: _Issues):
     if mapping is None or key not in mapping:
         issues.add(
             path,
@@ -386,7 +392,7 @@ def _required(mapping: Mapping[str, Any] | None, key: str, path: str, issues: _I
 
 
 def _string(value: object, path: str, issues: _Issues, *, filename: bool = False):
-    valid = isinstance(value, str) and bool(value.strip())
+    valid = type(value) is str and bool(value.strip())
     if valid and filename:
         valid = all(char not in value for char in '/\\\0') and value not in {".", ".."}
     if not valid:
@@ -397,7 +403,7 @@ def _string(value: object, path: str, issues: _Issues, *, filename: bool = False
 
 
 def _boolean(value: object, path: str, issues: _Issues) -> bool | None:
-    if not isinstance(value, bool):
+    if type(value) is not bool:
         issues.add(path, value, "a boolean", f"Set {path} to true or false.")
         return None
     return value
@@ -413,12 +419,10 @@ def _number(
     maximum: float | None = None,
     strict_minimum: bool = False,
 ) -> int | float | None:
-    valid_type = isinstance(value, int if integer else (int, float)) and not isinstance(
-        value, bool
-    )
+    valid_type = type(value) is int if integer else type(value) in (int, float)
     finite = valid_type and (
-        (not isinstance(value, int) or value.bit_length() <= 4096)
-        and (not isinstance(value, float) or math.isfinite(value))
+        (type(value) is not int or value.bit_length() <= 4096)
+        and (type(value) is not float or math.isfinite(value))
     )
     in_range = finite
     if in_range and minimum is not None:
@@ -439,7 +443,7 @@ def _number(
 
 
 def _choice(value: object, path: str, issues: _Issues, choices: Sequence[str]):
-    if not isinstance(value, str) or value not in choices:
+    if type(value) is not str or value not in choices:
         issues.add(path, value, f"one of {tuple(choices)}", f"Choose a supported {path} value.")
         return None
     return value
@@ -453,7 +457,7 @@ def _string_list(
     minimum: int = 1,
     choices: Sequence[str] | None = None,
 ) -> list[str] | None:
-    if not isinstance(value, list):
+    if type(value) is not list:
         issues.add(path, value, "a list of strings", f"Set {path} to a YAML list.")
         return None
     if len(value) < minimum:
@@ -613,7 +617,7 @@ def _validate_dynamic_gene_map(
     section = _mapping(_required(root, key, key, issues), key, issues)
     if section is None:
         return
-    string_keys = [name for name in section if isinstance(name, str)]
+    string_keys = [name for name in section if type(name) is str]
     if not string_keys:
         issues.add(key, section, "a non-empty mapping", f"Add at least one named {key} entry.")
     for name in sorted(string_keys):
@@ -738,11 +742,12 @@ def _validate_evaluation(root: Mapping[str, Any], issues: _Issues) -> None:
 
 
 def _validate_json_tree(value: object, path: str, issues: _Issues) -> object:
-    if isinstance(value, Path):
+    value_type = type(value)
+    if value_type is _CONCRETE_PATH_TYPE:
         return value.as_posix()
-    if value is None or isinstance(value, (str, bool)):
+    if value is None or value_type in (str, bool):
         return value
-    if isinstance(value, int):
+    if value_type is int:
         if value.bit_length() > 4096:
             issues.add(
                 path,
@@ -752,15 +757,15 @@ def _validate_json_tree(value: object, path: str, issues: _Issues) -> object:
             )
             return None
         return value
-    if isinstance(value, float):
+    if value_type is float:
         if not math.isfinite(value):
             issues.add(path, value, "a finite JSON number", f"Replace the non-finite value at {path}.")
         return value
-    if isinstance(value, tuple):
+    if value_type is tuple:
         return [_validate_json_tree(item, f"{path}[{index}]", issues) for index, item in enumerate(value)]
-    if isinstance(value, list):
+    if value_type is list:
         return [_validate_json_tree(item, f"{path}[{index}]", issues) for index, item in enumerate(value)]
-    if isinstance(value, Mapping):
+    if value_type is dict:
         result: dict[str, object] = {}
         for key in sorted(key for key in value if type(key) is str):
             result[key] = _validate_json_tree(value[key], f"{path}.{key}", issues)
@@ -781,7 +786,7 @@ def resolve_config(raw: Mapping[str, Any] | None) -> ResolvedConfig:
     No strings or numbers are coerced.
     """
     issues = _Issues()
-    if not isinstance(raw, Mapping):
+    if type(raw) is not dict:
         issues.add(
             "config",
             raw,

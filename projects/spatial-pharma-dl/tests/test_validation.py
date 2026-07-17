@@ -6,6 +6,7 @@ import copy
 import importlib
 import math
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -194,6 +195,215 @@ def test_invalid_key_sort_never_calls_user_repr_or_comparison() -> None:
 
     assert [issue.path for issue in caught.value.issues].count("config.<key>") == 2
     assert str(caught.value).count("received <HostileKey>") == 2
+
+
+def test_hostile_root_mapping_subclasses_are_rejected_without_execution() -> None:
+    calls: dict[str, int] = {}
+
+    def hostile(name: str) -> None:
+        calls[name] = calls.get(name, 0) + 1
+        raise AssertionError(f"executed hostile root operation: {name}")
+
+    class HostileDict(dict[object, object]):
+        def __len__(self) -> int:
+            hostile("dict_len")
+
+        def __iter__(self):
+            hostile("dict_iter")
+
+        def __getitem__(self, key: object) -> object:
+            hostile("dict_getitem")
+
+        def __contains__(self, key: object) -> bool:
+            hostile("dict_contains")
+
+        def __repr__(self) -> str:
+            hostile("dict_repr")
+
+    class HostileMapping(Mapping[object, object]):
+        def __len__(self) -> int:
+            hostile("mapping_len")
+
+        def __iter__(self):
+            hostile("mapping_iter")
+
+        def __getitem__(self, key: object) -> object:
+            hostile("mapping_getitem")
+
+        def __repr__(self) -> str:
+            hostile("mapping_repr")
+
+    for value in (HostileDict(), HostileMapping()):
+        calls.clear()
+        with pytest.raises(ConfigValidationError) as caught:
+            resolve_config(value)
+        assert [issue.path for issue in caught.value.issues] == ["config"]
+        assert "ATTACKER" not in str(caught.value)
+        assert calls == {}
+
+
+def test_hostile_allowed_type_subclasses_aggregate_without_execution() -> None:
+    calls: dict[str, int] = {}
+
+    def hostile(name: str):
+        calls[name] = calls.get(name, 0) + 1
+        raise AssertionError(f"ATTACKER operation executed: {name}")
+
+    class HostileInt(int):
+        def bit_length(self) -> int:
+            hostile("int_bit_length")
+
+        def __repr__(self) -> str:
+            hostile("int_repr")
+
+        def __hash__(self) -> int:
+            hostile("int_hash")
+
+        def __lt__(self, other: object) -> bool:
+            hostile("int_compare")
+
+    class HostileFloat(float):
+        def __repr__(self) -> str:
+            hostile("float_repr")
+
+        def __hash__(self) -> int:
+            hostile("float_hash")
+
+        def __lt__(self, other: object) -> bool:
+            hostile("float_compare")
+
+        def __ge__(self, other: object) -> bool:
+            hostile("float_compare")
+
+    class HostileStr(str):
+        def strip(self, chars: str | None = None) -> str:
+            hostile("str_strip")
+
+        def __repr__(self) -> str:
+            hostile("str_repr")
+
+        def __hash__(self) -> int:
+            hostile("str_hash")
+
+        def __lt__(self, other: object) -> bool:
+            hostile("str_compare")
+
+    class HostileList(list[object]):
+        def __len__(self) -> int:
+            hostile("list_len")
+
+        def __iter__(self):
+            hostile("list_iter")
+
+        def __getitem__(self, key: object) -> object:
+            hostile("list_getitem")
+
+        def __repr__(self) -> str:
+            hostile("list_repr")
+
+    class HostileTuple(tuple[object, ...]):
+        def __len__(self) -> int:
+            hostile("tuple_len")
+
+        def __iter__(self):
+            hostile("tuple_iter")
+
+        def __getitem__(self, key: object) -> object:
+            hostile("tuple_getitem")
+
+        def __repr__(self) -> str:
+            hostile("tuple_repr")
+
+    class HostileDict(dict[object, object]):
+        def __len__(self) -> int:
+            hostile("nested_dict_len")
+
+        def __iter__(self):
+            hostile("nested_dict_iter")
+
+        def __getitem__(self, key: object) -> object:
+            hostile("nested_dict_getitem")
+
+        def __contains__(self, key: object) -> bool:
+            hostile("nested_dict_contains")
+
+        def __repr__(self) -> str:
+            hostile("nested_dict_repr")
+
+    class HostileMapping(Mapping[object, object]):
+        def __len__(self) -> int:
+            hostile("nested_mapping_len")
+
+        def __iter__(self):
+            hostile("nested_mapping_iter")
+
+        def __getitem__(self, key: object) -> object:
+            hostile("nested_mapping_getitem")
+
+        def __repr__(self) -> str:
+            hostile("nested_mapping_repr")
+
+    concrete_path_type = type(Path())
+
+    class HostilePath(concrete_path_type):
+        def as_posix(self) -> str:
+            hostile("path_as_posix")
+
+        def __str__(self) -> str:
+            hostile("path_str")
+
+        def __repr__(self) -> str:
+            hostile("path_repr")
+
+        def __hash__(self) -> int:
+            hostile("path_hash")
+
+    cfg = _valid_config()
+    cfg["seed"] = HostileInt(1)
+    cfg["experiment"] = HostileStr("attacker-experiment")
+    cfg["cohorts"]["external"] = HostileList(["attacker-slide"])
+    cfg["marker_genes"] = HostileDict({"attacker": ["GENE"]})
+    cfg["gene_modules"] = HostileMapping()
+    cfg["patches"]["version"] = HostilePath("attacker-path")
+    cfg["training"]["lr"] = HostileFloat(0.1)
+    cfg["evaluation"]["primary_metrics"]["classification"] = HostileTuple(
+        ("accuracy",)
+    )
+    calls.clear()
+
+    reversed_cfg = {key: cfg[key] for key in reversed(cfg)}
+    errors: list[ConfigValidationError] = []
+    for candidate in (cfg, reversed_cfg):
+        with pytest.raises(ConfigValidationError) as caught:
+            resolve_config(candidate)
+        errors.append(caught.value)
+
+    schema_paths = [issue.path for issue in errors[0].issues[:8]]
+    assert schema_paths == [
+        "seed",
+        "experiment",
+        "cohorts.external",
+        "marker_genes",
+        "gene_modules",
+        "patches.version",
+        "training.lr",
+        "evaluation.primary_metrics.classification",
+    ]
+    message = str(errors[0])
+    for label in (
+        "HostileInt",
+        "HostileFloat",
+        "HostileStr",
+        "HostileList",
+        "HostileTuple",
+        "HostileDict",
+        "HostileMapping",
+        "HostilePath",
+    ):
+        assert f"<{label}>" in message
+    assert "ATTACKER" not in message
+    assert str(errors[0]) == str(errors[1])
+    assert calls == {}
 
 
 def test_canonical_json_sorts_mappings_but_preserves_cohort_lists() -> None:
