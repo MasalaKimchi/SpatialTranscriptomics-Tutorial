@@ -7,32 +7,49 @@ findings:
   warning: 0
   info: 0
   total: 0
+resolved_findings: 9
 ---
 
 # Phase 4 Code Review
 
-**Scope:** All Phase 4 plans and summaries, the complete artifact contract and production adapters, runner and notebook consumers, root notebook retained outputs, and the review-fix commits `0ec430e..2a423c0`.
+**Scope:** Second review-fix iteration through commits `5027032`, `6fcf68f`, and `b14e003`, including every WR-06R..WR-09 reproduction, the 19 retained production artifact adapters, their parent-lineage paths, and source/generated-notebook bypass inventory.
 
-**Result:** Clean. The eight warning findings from the initial deep review are closed with adversarial regression evidence, and the canonical fast gate passes Ruff plus 395 offline tests.
+**Result:** Clean. WR-01 through WR-09 are closed with production-reader evidence and the full offline gate passes.
 
-## Closure Evidence
+## Closed Second-Pass Findings
 
-- **WR-01:** Excessive array/object nesting below the byte cap is translated to bounded `ArtifactValidationError(malformed_manifest)`.
-- **WR-02:** Payload bytes are copied and hashed from one admitted descriptor into a private decoder snapshot. Generic, patch, and checkpoint ABA restoration tests prove unchecksummed public-path bytes never reach decoders.
-- **WR-03:** Every production publisher supplies an observed-schema extractor; canonical observed and declared schemas must match before either final replacement.
-- **WR-04:** Fingerprint projections are per-kind leaf allowlists. Embedding identity ignores `enabled`, `cache`, `device`, and scheduling-only `batch_size`, while model identity still invalidates.
-- **WR-05:** Report and retained-result readers require independently supplied current lineage and identity/value expectations. The runner and generated evaluation notebook derive report expectations from current checkpoints, labels, patches, folds, and slides.
-- **WR-06:** Named result registries reject unknown names and enforce exact columns/keys, types, identity uniqueness, cardinality/range invariants, and typed `CohortManifest`/`PreprocessingManifest` reconstruction.
-- **WR-07:** Patch lineage binds the actual processed-slide and admitted shared-stain-reference manifests; per-slide normalization omits irrelevant shared lineage. Patch indexes require actual current label and patch parent sidecars in admitted order and fail before publication when a parent is absent.
-- **WR-08:** Four retained root-notebook CSVs publish through named atomic adapters. Static inventory parses committed notebook code with exact-purpose allowlists. A real 19-artifact chain publishes, admits, validates bytes, and proves parent-lineage invalidation for every retained logical kind.
+### WR-06R — Exact partitions and scientific value bounds
 
-## Verification
+`eval.py` now requires each configured slide to occur exactly once across mutually exclusive outcome partitions with consistent cohort identity. Benchmark, table, and experiment-summary readers enforce metric-specific finite ranges, nonnegative losses/counts, bounded mitochondrial percentages, and the intended upper-only R2 policy. Adversarial writer/production-loader tests reject overlaps and impossible values.
 
-- Focused generic contract, scientific adapter, checkpoint, orchestration, notebook, cohort, and identity gates passed.
-- Root-notebook adapter/static/19-kind gate: 141 passed.
-- Final `python scripts/verify.py fast`: Ruff passed and 395 offline tests passed in about 20 seconds.
-- `git diff --check` passed before each atomic implementation commit.
+### WR-07R — Child lineage derives from admitted parents
+
+Processed slides, label tables, patch arrays, and stain references now return or consume typed `ArtifactAdmission` records; child fingerprints use only manifests obtained after complete checksum and semantic admission. The pipeline passes the actual shared stain-reference ID explicitly. Missing, corrupt, wrong-schema, and mixed-generation parents fail before patch/index publication.
+
+### WR-08R — Real production graph and exact static closure
+
+The generic `.bin` fixture is gone. `test_artifact_adapters.py` now round-trips all 19 retained artifacts through their real H5AD, Parquet, CSV, NPZ, PyTorch, and canonical-JSON writers/readers. Dedicated adversarial tests exercise the real dependency edges. Static inventory allowances are exact full lines, stale `path.is_file()` exemptions are removed, committed pharma notebooks are scanned, and a synthetic bypass placed inside an otherwise allowed production file is detected.
+
+### WR-09 — Writers require reusable lineage before side effects
+
+All three public result writers reject absent or empty lineage before directory creation or publication. Every successful writer call has a matching independently expected loader path, covered by round-trip and no-side-effect tests.
+
+## Closed Original Findings
+
+- **WR-01:** Deep array/object JSON nesting now returns bounded `malformed_manifest`.
+- **WR-02:** Generic, patch, and checkpoint decoders consume private admitted snapshots; public-path ABA bytes do not reach decoders.
+- **WR-03:** Publication compares the production reader's observed schema with the declared schema before replacement.
+- **WR-04:** Embedding fingerprints ignore `enabled`, `cache`, `device`, and scheduling-only `batch_size`, while model identity remains relevant.
+- **WR-05:** Loaders no longer derive current lineage/identity/value expectations from their own sidecars; runner and generated report consumers supply independent expectations.
+- Root notebook retained CSV writes now call `save_root_result_table`, and gallery H5AD consumers remain contract-bound.
+
+## Verification Performed
+
+- Focused production adapter/static gate: **26 passed**.
+- Canonical `python scripts/verify.py fast`: Ruff passed and **400 offline tests passed**.
+- Test collection independently confirmed **400 tests**.
+- No network, model download, dataset download, or push was performed.
 
 ## Review Conclusion
 
-Phase 4 is clean and ready for independent requirement verification. Phase 5 remains responsible for replacing the explicitly local-only pickle-compatible patch/checkpoint payload formats.
+Phase 4 is **clean**. No critical, warning, or informational review finding remains.
