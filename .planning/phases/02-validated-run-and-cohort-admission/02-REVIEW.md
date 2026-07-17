@@ -10,57 +10,44 @@ findings:
 
 # Phase 2 Code Review
 
-**Depth:** Final deep re-review after `65cbeb0`  
-**Scope:** The same 14 Phase 2 source, configuration, runner, and focused test files.
+**Depth:** Deep re-review after `cdc6903` and `9e28390`
+
+**Scope:** The original 14-file Phase 2 scope, including all five files modified by Plan 02-04 and their new adversarial tests.
 
 ## Result
 
-No remaining or newly introduced critical, warning, or informational issues were found in the reviewed Phase 2 scope. All original findings and all iteration-2 residual findings are resolved in the current implementation.
+No critical, warning, or informational issues remain in the reviewed Phase 2 scope. G-01 and G-02 are closed without regressing the validated cohort, empty-boundary, compatibility, or later-phase ownership contracts.
 
-## Final Finding Resolution
+## Gap Closure Verification
 
-### WR-01 — Resolved
+### G-01 — Resolved
 
-Configuration validation remains inside `ConfigValidationError` for oversized integers and hostile objects. Received-value rendering does not execute arbitrary `repr`, and non-string mapping keys now use deterministic non-executing sort tokens. Primitive invalid-key diagnostics are stable across reversed insertion order and are reported once rather than duplicated by schema and JSON-tree passes.
+`resolve_config()` rejects root dict/Mapping subclasses before optional-default merging or traversal. Nested hostile subclasses of supported primitives, sequences, mappings, and the concrete platform Path type are retained only as inert issue evidence; their overridden representation, hashing, comparison, length, iteration, lookup, numeric, string, and path-conversion methods are not called.
 
-### WR-02 — Resolved
+Exact built-in values continue through deterministic schema traversal and canonicalization. Oversized integers, non-finite floats, invalid primitive keys, list order, canonical mapping order, and fresh mutable `to_dict()` views retain their established behavior. Equivalent reversed plain mappings containing the same hostile values produce identical exception text.
 
-Admission validates failure and availability evidence before manifest construction. Availability members are materialized and exact-type checked before set construction, so scalar strings, unhashable values, hostile-hash objects, non-string IDs, and unknown IDs raise `CohortAdmissionInputError`. Failure details are replaced with fixed public guidance, keeping canonical manifests JSON-safe and free of caller exception/path text.
+### G-02 — Resolved
 
-### WR-03 — Resolved
+`foundation_config`, `foundation_model_spec`, `load_frozen_encoder`, `load_or_extract_slide_embeddings`, and `save_benchmark_report` reserve default loading for `cfg is None`. Every supplied mapping is resolved before cache-path, directory, path-existence, NumPy cache, device, diagnostic, model/encoder, slide-patch, DataFrame, output-path, or writer seams.
 
-Strict source curation stops on the first `SourceAcquisitionError`; later configured slides never reach preprocessing or cache publication. The raised deterministic manifest records the failed member and marks later members `source_not_attempted`, without falsely including or failing them. Explicit partial mode still collects all configured source outcomes.
+Explicit `{}` and representative non-empty malformed mappings raise `ConfigValidationError` without reloading defaults or producing files. Complete valid supplied configurations preserve encoder, cache-disabled embedding, report filename, and return behavior; omitted configuration still loads the validated default facade once.
 
-### WR-04 — Resolved
+## Prior Review Status
 
-Only documented acquisition exceptions raised at the source-loader seam become `SourceAcquisitionError`. Preprocessing, implementation, and storage exceptions continue to propagate without being converted into partial-cohort policy.
-
-### WR-05 — Resolved
-
-All admitted per-slide label frames are built and validated before the output directory or any Parquet/CSV writer is reached. Later-slide empty results cannot leave an earlier partial label publication.
-
-### WR-06 — Resolved
-
-Classification and regression target selection occurs before device resolution, diagnostic printing, dataset construction, or model creation in CNN fold training.
-
-### WR-07 — Resolved
-
-Nested LOSO requires three unique non-empty slides at its public admission boundary, before task preprocessing or probe fitting, without adding Phase 6 class-support policy.
-
-### IN-01 — Resolved
-
-Behavioral tests now cover oversized values, hostile representations/comparisons/hashes, deterministic invalid-key ordering, malformed admission evidence, sanitized failure details, exact strict/partial manifest collections, narrow exception taxonomy, forbidden output seams, strict fail-fast processing, and integrated scientific-boundary placement.
+- WR-01 through WR-07 remain resolved.
+- IN-01 remains resolved with the added Plan 02-04 hostile-subclass and forbidden-seam evidence.
+- Strict and partial admission membership, manifest ordering/reasons, and strict fail-fast source behavior are unchanged by the gap closure.
+- No new cache durability, safe-format migration, identity repair, class-support policy, leakage/scaling/imputation policy, image science, or label-confidence behavior was introduced.
 
 ## Verification Performed
 
-- Focused Phase 2 gate: 88 offline tests passed.
-- Canonical `python scripts/verify.py fast`: Ruff passed first; all 146 offline tests passed in 4.74 seconds.
-- Scoped Ruff over the fix/review source and test files: passed.
-- `git diff --check c63de9e..HEAD`: passed.
-- Replayed the prior oversized-integer, hostile-rendering, reversed-invalid-key, unhashable-availability, strict-source-failure, target-before-device, label-before-writer, and two-slide nested-LOSO paths against current code.
-- Inspected `65cbeb0` and the complete `02-REVIEW-FIX.md` claims against actual call chains.
+- Plan 02-04 focused gate: 104 offline tests passed.
+- Canonical `python scripts/verify.py fast`: Ruff passed first; all 157 offline tests passed in 7.65 seconds.
+- Scoped Ruff over all five Plan 02-04 production/test files: passed.
+- Source diff check for `65cbeb0..HEAD`: clean; the only diagnostics before this report rewrite were formatting in the prior uncommitted review artifact.
+- Static truthiness audit found no `cfg = cfg or load_config()` or equivalent fallback in the scoped foundation/report call chains.
+- Inspected both implementation commits, Plan 02-04 plan/summary, current tests, and the actual config-to-cache/device/model/output call ordering.
 
 ## Review Conclusion
 
-Phase 2 is clean at deep review depth and is ready for independent verification. Later roadmap ownership remains intact: no identity repair, fold class-support policy, leakage/scaling/imputation change, cache-format migration, durable artifact guarantee, image normalization, or label-confidence behavior was introduced.
-
+Phase 2 is clean at deep review depth and ready for its independent verification handoff.
