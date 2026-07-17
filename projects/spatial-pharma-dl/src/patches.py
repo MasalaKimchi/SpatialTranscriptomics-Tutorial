@@ -22,6 +22,7 @@ from utils import st_helpers as st
 
 from .data import (
     _processed_fingerprint,
+    _processed_slide_path,
     load_config,
     pharma_processed_path,
     safe_filename,
@@ -30,11 +31,13 @@ from .identity import validate_anndata_spot_identity
 from .validation import StageValidationError, require_non_empty, resolve_config
 from utils.artifacts import (
     ARTIFACT_CONTRACT_VERSIONS,
+    ArtifactReuseStatus,
     ArtifactValidationError,
     admit_artifact,
     artifact_reuse_status,
     build_fingerprint,
     publish_artifact,
+    read_artifact_manifest,
 )
 
 
@@ -158,26 +161,80 @@ def patch_cache_path(slide_id: str, cfg: dict[str, Any] | None = None) -> Path:
     return pharma_processed_path() / f"{safe_filename(slide_id)}_patches_{version}.npz"
 
 
+def _parent_manifest_context(
+    path: Path,
+    *,
+    expected_kind: str,
+    expected_fingerprint=None,
+) -> dict[str, str]:
+    manifest = read_artifact_manifest(path)
+    if manifest.artifact_kind != expected_kind or (
+        expected_fingerprint is not None
+        and manifest.fingerprint.digest != expected_fingerprint.digest
+    ):
+        raise ArtifactValidationError(
+            "stale_parent_artifact", artifact_kind=expected_kind, basename=path.name
+        )
+    return {
+        "fingerprint": manifest.fingerprint.digest,
+        "manifest_sha256": hashlib.sha256(
+            manifest.canonical_json.encode("utf-8")
+        ).hexdigest(),
+        "payload_sha256": manifest.payload_sha256,
+    }
+
+
+def _reference_slide_id(slide_id: str, cfg: dict[str, Any]) -> str | None:
+    if cfg["patches"].get("per_slide_stain_norm", False):
+        return None
+    for candidate in cfg["cohorts"]["oncology"]:
+        try:
+            _parent_manifest_context(
+                _processed_slide_path(candidate),
+                expected_kind="processed_slide",
+                expected_fingerprint=_processed_fingerprint(candidate, cfg),
+            )
+        except (ArtifactValidationError, FileNotFoundError):
+            continue
+        return candidate
+    return slide_id
+
+
+def _patch_artifact_context(slide_id: str, cfg: dict[str, Any]) -> dict[str, object]:
+    processed = _parent_manifest_context(
+        _processed_slide_path(slide_id),
+        expected_kind="processed_slide",
+        expected_fingerprint=_processed_fingerprint(slide_id, cfg),
+    )
+    reference_id = _reference_slide_id(slide_id, cfg)
+    reference = None
+    if reference_id is not None:
+        reference = {
+            "slide_id": reference_id,
+            **_parent_manifest_context(
+                _processed_slide_path(reference_id),
+                expected_kind="processed_slide",
+                expected_fingerprint=_processed_fingerprint(reference_id, cfg),
+            ),
+        }
+    return {"processed_slide": processed, "stain_reference": reference}
+
+
 def _patch_fingerprint(slide_id: str, cfg: dict[str, Any]):
     resolved = resolve_config(cfg).to_dict()
-    reference_ids = resolved["cohorts"]["oncology"]
-    reference_id = reference_ids[0] if reference_ids else slide_id
+    context = _patch_artifact_context(slide_id, resolved)
+    reference = context["stain_reference"]
     return build_fingerprint(
         "patch",
         {
             "configuration": resolved,
             "source": {
-                "stain_reference_policy": "first-configured-oncology-slide",
-                "reference_slide_id": reference_id,
-                "reference_slide_fingerprint": _processed_fingerprint(
-                    reference_id, resolved
-                ).digest,
+                "stain_reference_policy": (
+                    "per-slide" if reference is None else "first-admitted-oncology-slide"
+                ),
+                "stain_reference": reference,
             },
-            "upstream": {
-                "processed_slide_fingerprint": _processed_fingerprint(
-                    slide_id, resolved
-                ).digest
-            },
+            "upstream": context,
             "identity": {"slide_id": slide_id},
         },
     )
@@ -331,7 +388,7 @@ def fit_reference_stain(
         guidance="Admit at least one processed slide before fitting a stain reference.",
     )
     for sid in sample_ids:
-        adata = load_slide(sid)
+        adata = load_slide(sid, cfg=cfg)
         img = st.get_image(adata, "hires")
         return stain_matrix_macenko(img)
     raise FileNotFoundError("No processed slides found for stain reference.")
@@ -371,6 +428,7 @@ def load_patch_arrays(
 ) -> tuple[np.ndarray, pd.DataFrame]:
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
     path = patch_cache_path(slide_id, resolved)
+    read_artifact_manifest(path)
     admission = admit_artifact(
         path,
         expected_kind="patch",
@@ -390,6 +448,10 @@ def patch_reuse_status(slide_id: str, cfg: dict[str, Any] | None = None):
     """Return a contract-aware cache decision without creating directories."""
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
     path = patch_cache_path(slide_id, resolved)
+    try:
+        read_artifact_manifest(path)
+    except ArtifactValidationError as exc:
+        return ArtifactReuseStatus(False, exc.reason_code)
     return artifact_reuse_status(
         path,
         expected_kind="patch",
@@ -418,7 +480,7 @@ def build_patch_cohort(
     if ref_stain is None:
         ref_stain = fit_reference_stain(sample_ids, cfg)
     for sid in sample_ids:
-        adata = load_slide(sid)
+        adata = load_slide(sid, cfg=cfg)
         patches, meta = extract_all_patches_for_slide(adata, sid, ref_stain, cfg)
         save_patch_arrays(sid, patches, meta, cfg=cfg)
         print(f"Saved {len(patches)} patches for {sid}")
@@ -426,22 +488,33 @@ def build_patch_cohort(
 
 
 def _index_fingerprint_for_ids(sample_ids: list[str], cfg: dict[str, Any]):
-    from .labels import _table_fingerprint
+    from .labels import _label_path, _table_fingerprint
 
     return build_fingerprint(
         "patch_index",
         {
             "configuration": cfg,
             "source": {
-                "label_fingerprints": [
-                    _table_fingerprint("label_table", [sid], cfg).digest
+                "label_manifests": {
+                    sid: _parent_manifest_context(
+                        _label_path(sid),
+                        expected_kind="label_table",
+                        expected_fingerprint=_table_fingerprint(
+                            "label_table", [sid], cfg
+                        ),
+                    )
                     for sid in sample_ids
-                ]
+                },
             },
             "upstream": {
-                "patch_fingerprints": [
-                    _patch_fingerprint(sid, cfg).digest for sid in sample_ids
-                ]
+                "patch_manifests": {
+                    sid: _parent_manifest_context(
+                        patch_cache_path(sid, cfg),
+                        expected_kind="patch",
+                        expected_fingerprint=_patch_fingerprint(sid, cfg),
+                    )
+                    for sid in sample_ids
+                },
             },
             "identity": {"slide_ids": sample_ids},
         },
@@ -464,7 +537,10 @@ def save_patch_index(
     artifact_context: dict[str, object] | None = None,
 ) -> Path:
     """Save combined patch+label index to data/processed/pharma/patch_index.parquet."""
-    del artifact_context  # reserved compatibility hook; projection is derived exactly
+    if artifact_context is not None:
+        raise ArtifactValidationError(
+            "invalid_fingerprint_inputs", artifact_kind="patch_index"
+        )
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
     path = path or pharma_processed_path() / "patch_index.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)

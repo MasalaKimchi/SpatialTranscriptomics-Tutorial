@@ -43,6 +43,14 @@ def test_legacy_patch_stops_before_local_object_decode(tmp_path, monkeypatch):
 def test_patch_lineage_ignores_training_but_rejects_patch_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "project_root", lambda: tmp_path)
     cfg = data.load_config()
+    monkeypatch.setattr(
+        patches,
+        "_patch_artifact_context",
+        lambda _slide_id, _cfg: {
+            "processed_slide": {"fingerprint": "a" * 64},
+            "stain_reference": None,
+        },
+    )
     values = np.zeros((1, 3, 4, 4), dtype=np.float32)
     meta = pd.DataFrame(
         {

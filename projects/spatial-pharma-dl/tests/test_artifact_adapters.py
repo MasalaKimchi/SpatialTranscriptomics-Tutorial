@@ -118,9 +118,12 @@ def test_label_and_domain_tables_round_trip_with_processed_lineage(tmp_path, mon
     assert manifest_path(label_path).is_file() and manifest_path(domain_path).is_file()
 
 
-def test_trusted_local_patch_and_index_round_trip(tmp_path, monkeypatch):
+def test_trusted_local_patch_and_index_round_trip(
+    tmp_path, monkeypatch, synthetic_anndata_factory
+):
     monkeypatch.setattr(st, "project_root", lambda: tmp_path)
     cfg = data.load_config()
+    data.save_slide(_processed_adata(synthetic_anndata_factory), "slide_a", cfg=cfg)
     values = np.zeros((2, 3, 4, 4), dtype=np.float32)
     meta = pd.DataFrame(
         {
@@ -144,6 +147,7 @@ def test_trusted_local_patch_and_index_round_trip(tmp_path, monkeypatch):
         tme_class=["other", "other"],
         tme_class_id=[0, 0],
     )
+    labels.save_label_table(index, "slide_a", cfg=cfg)
     index_path = patches.save_patch_index(index, cfg=cfg)
     pd.testing.assert_frame_equal(
         patches.load_patch_index(cfg=cfg, sample_ids=["slide_a"]), index
@@ -157,9 +161,12 @@ def test_patch_path_resolution_is_pure(tmp_path, monkeypatch):
     assert not path.parent.exists()
 
 
-def test_embedding_cache_round_trip_is_safe_primitive_npz(tmp_path, monkeypatch):
+def test_embedding_cache_round_trip_is_safe_primitive_npz(
+    tmp_path, monkeypatch, synthetic_anndata_factory
+):
     monkeypatch.setattr(st, "project_root", lambda: tmp_path)
     cfg = data.load_config()
+    data.save_slide(_processed_adata(synthetic_anndata_factory), "slide_a", cfg=cfg)
     spec = foundation.FoundationModelSpec(
         repo_id="local/test",
         backend="test",
@@ -329,3 +336,38 @@ def test_named_schema_registry_rejects_unknown_and_malformed_payloads(tmp_path):
             upstream_lineage={"admission": "current"},
             artifact_kind="cohort_manifest",
         )
+
+
+def test_patch_lineage_uses_actual_partial_cohort_reference_and_index_parents(
+    tmp_path, monkeypatch, synthetic_anndata_factory
+):
+    monkeypatch.setattr(st, "project_root", lambda: tmp_path)
+    cfg = data.load_config()
+    cfg["cohorts"]["oncology"] = ["missing_slide", "slide_a"]
+    cfg["patches"]["per_slide_stain_norm"] = False
+    data.save_slide(_processed_adata(synthetic_anndata_factory), "slide_a", cfg=cfg)
+    context = patches._patch_artifact_context("slide_a", cfg)
+    assert context["stain_reference"]["slide_id"] == "slide_a"
+
+    values = np.zeros((1, 3, 4, 4), dtype=np.float32)
+    meta = pd.DataFrame(
+        {
+            "slide_id": ["slide_a"],
+            "spot_id": ["spot_0"],
+            "x": [1.0],
+            "y": [2.0],
+            "native_patch_px": [8],
+        }
+    )
+    patches.save_patch_arrays("slide_a", values, meta, cfg=cfg)
+    index = meta[["slide_id", "spot_id"]].assign(
+        cluster=["0"], cluster_id=[0], domain_name=["domain_0"],
+        tme_class=["other"], tme_class_id=[0],
+    )
+    with pytest.raises(ArtifactValidationError, match="missing_payload"):
+        patches.save_patch_index(index, cfg=cfg)
+    labels.save_label_table(index, "slide_a", cfg=cfg)
+    path = patches.save_patch_index(index, cfg=cfg)
+    declared = patches.read_artifact_manifest(path).fingerprint.to_dict()["inputs"]
+    assert list(declared["source"]["label_manifests"]) == ["slide_a"]
+    assert list(declared["upstream"]["patch_manifests"]) == ["slide_a"]

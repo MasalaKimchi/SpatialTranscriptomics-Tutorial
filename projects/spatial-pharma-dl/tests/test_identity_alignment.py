@@ -28,6 +28,16 @@ from utils.artifacts import (
 pytestmark = pytest.mark.offline
 
 
+@pytest.fixture(autouse=True)
+def _stable_patch_parent_for_identity_tests(monkeypatch):
+    """Identity tests isolate alignment from Phase 4 parent-file setup."""
+    monkeypatch.setattr(
+        foundation_module,
+        "_patch_fingerprint",
+        lambda *_args, **_kwargs: type("Fingerprint", (), {"digest": "a" * 64})(),
+    )
+
+
 def _align(case, **kwargs):
     return align_labels_with_metadata(
         case["labels"],
