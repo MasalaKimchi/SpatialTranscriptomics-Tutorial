@@ -1,7 +1,7 @@
 ---
 phase: 02-validated-run-and-cohort-admission
-status: gaps_found
-score: "20/22"
+status: passed
+score: "22/22"
 requirements:
   - VAL-01
   - VAL-03
@@ -14,220 +14,228 @@ verifier: independent-gsd-verifier
 
 ## Result
 
-Phase 2 is close, but it does not yet fully achieve its goal. Strict and partial
-cohort admission, deterministic manifests, source-failure handling, and all
-named empty scientific boundaries behave as planned. Two independent contract
-gaps remain:
+Phase 2 achieves its goal: only experiments whose configuration, stage inputs,
+and final resolved cohort satisfy explicit contracts may start expensive or
+output-producing work. VAL-01, VAL-03, and VAL-04 are verified against current
+source behavior, including the Plan 02-04 closure of both gaps found during the
+first independent verification.
 
-1. the public configuration resolver can execute methods overridden by hostile
-   subclasses of JSON primitive types instead of rejecting them through
-   `ConfigValidationError`;
-2. foundation-stage configuration helpers still use truthiness fallback, so an
-   explicitly supplied empty configuration is silently replaced with the
-   repository default and can proceed toward cache or model side effects.
+The score covers 22 independent behavioral checks across all four plan
+must-haves, D-01 through D-05, T-01 through T-05, the four roadmap success
+criteria, three requirements, prior review closure, compatibility, and the
+canonical regression gates. All 22 pass.
 
-The score is based on 22 independent behavioral checks spanning plan
-must-haves, D-01 through D-05, T-01 through T-05, roadmap success criteria,
-requirements, review closure, compatibility, and regression gates. Twenty
-checks passed and the two root gaps above failed. Overlapping consequences are
-not double-counted in the score.
+## Gap Closure
 
-## Blocking Gaps
+### G-01 — Closed: hostile primitive subclasses fail without execution
 
-### G-01 — Hostile primitive subclasses escape the aggregate validation boundary
+`resolve_config()` now admits an exact built-in dictionary at the root and
+exact safe built-in primitive/container types at their permitted schema
+positions. Root dict/Mapping subclasses and nested subclasses of `int`,
+`float`, `str`, `list`, `tuple`, `dict`, arbitrary `Mapping`, and the concrete
+platform `Path` type are rejected through `ConfigValidationError` before their
+overridden operations can run.
 
-**Affected:** VAL-01, D-01, D-02, T-02, Plan 02-01 must-haves, roadmap success
-criterion 1, and the claimed closure of WR-01.
+The checked-in adversarial tests attach raising sentinels to representation,
+hashing, comparison, length, iteration, lookup, `strip`, `bit_length`, and
+path conversion. All sentinels remain zero. Equivalent reversed exact mappings
+with the same hostile values produce byte-identical exception text containing
+only inert bounded type labels and schema guidance.
 
-`validation._string`, `_number`, and `_validate_json_tree` use `isinstance`
-before calling primitive methods or comparisons. A caller can therefore pass a
-subclass of `int`, `float`, `str`, `list`, `tuple`, `Mapping`, or `Path` whose
-overridden operation executes during validation. This contradicts the plan's
-requirement to reject arbitrary non-JSON Python objects without invoking their
-behavior.
-
-Independent probes against the current source produced:
+Independent replay of the original failures produced:
 
 ```text
-training.batch_size = EvilInt(4), EvilInt.bit_length raises
--> RuntimeError: executed hostile numeric method
-
-experiment = EvilStr("safe"), EvilStr.strip raises
--> RuntimeError: executed hostile string method
+EvilInt training.batch_size -> ConfigValidationError
+EvilStr experiment          -> ConfigValidationError
 ```
 
-Neither probe reached `ConfigValidationError`, so defects were not aggregated
-and the advertised domain boundary was bypassed. The existing hostile tests
-cover ordinary objects, representations, invalid-key comparisons, and hashes,
-but not subclasses of allowed primitive types.
+Neither hostile method executed and neither attacker message entered the
+diagnostic. Exact built-in oversized integers, non-finite floats, invalid
+primitive keys, list order, canonical mapping order, and fresh mutable
+`to_dict()` behavior remain covered and unchanged.
 
-**Required remediation:** accept exact safe primitive/container types before
-performing operations, or copy values through a non-executing exact-type gate;
-reject subclasses as unsupported values. Add regression tests for hostile
-`int`, `float`, `str`, sequence, mapping, and `Path` subclasses and require one
-deterministic `ConfigValidationError` without executing their overrides.
+### G-02 — Closed: explicit invalid configs cannot reload defaults
 
-### G-02 — Explicit empty foundation configuration reloads defaults
+`foundation_config`, `foundation_model_spec`, `load_frozen_encoder`,
+`load_or_extract_slide_embeddings`, and `save_benchmark_report` reserve default
+loading for `cfg is None`. Every supplied configuration is resolved before any
+cache-path, directory, path-existence, NumPy cache, device, diagnostic, encoder,
+model, slide-patch, DataFrame, output-path, or writer seam.
 
-**Affected:** T-01 and the D-05 rule that explicit supplied values are not
-reinterpreted as absent.
+Independent probes monkeypatched default loading and all relevant side effects
+to fail, then called the four originally affected public helpers with `{}`.
+Each raised `ConfigValidationError` before a forbidden seam. Checked-in tests
+repeat this for both `{}` and a non-empty malformed mapping, including an
+explicit report path, and prove no output is created.
 
-The following touched/public helpers still use `cfg = cfg or load_config()`:
+The static audit below returned no match:
 
-- `src.foundation.foundation_config`;
-- `src.foundation.load_frozen_encoder`;
-- `src.foundation.load_or_extract_slide_embeddings`;
-- `src.eval.save_benchmark_report`.
+```text
+rg -n "cfg\s*=\s*cfg\s+or\s+load_config\(\)|cfg\s+or\s+load_config\(\)" \
+  projects/spatial-pharma-dl/src
+```
 
-An independent call to `foundation_config({})` returned the default foundation
-configuration rather than preserving or rejecting the explicit empty mapping.
-More importantly, `load_frozen_encoder({})` and
-`load_or_extract_slide_embeddings(..., cfg={})` can reload defaults and advance
-toward device resolution, model download, or cache-directory work. The Phase 2
-explicit-empty regression covers data, labels, and patches only, so it does not
-detect this remaining path.
+Omitted configuration still loads the validated default facade once. Complete
+supplied configurations preserve the existing encoder, cache-disabled
+embedding, report filename, and return behavior without default reload.
 
-**Required remediation:** use `if cfg is None: cfg = load_config()` consistently
-in the affected helpers, then validate or fail the explicit mapping before any
-cache, device, encoder, output-directory, or writer seam. Add forbidden-seam
-tests for explicit `{}` at the foundation and report boundaries.
+## Twenty-Two Acceptance Checks
+
+| # | Check | Result | Evidence |
+|---:|---|---:|---|
+| 1 | Aggregate schema defects | Passed | Plain invalid sections, keys, types, values, and cross-field combinations raise one ordered `ConfigValidationError`. |
+| 2 | Hostile value rejection | Passed | Primitive, container, mapping, and Path subclasses are rejected without invoking overrides. |
+| 3 | Canonical resolved configuration | Passed | Mapping keys sort, configured lists retain order, JSON is strict, and `to_dict()` views are fresh. |
+| 4 | Configuration facade compatibility | Passed | Default/custom YAML paths and mutable plain-dict returns remain stable; only fail-closed cohort policy was added. |
+| 5 | Immutable admitted run | Passed | Frozen records combine `ResolvedConfig` with ordered `cohort-manifest-v1`. |
+| 6 | Strict known-availability admission | Passed | All known missing/failed configured members aggregate before processing. |
+| 7 | Provisional remote admission | Passed | Provisional results publish nothing; strict source failure stops immediately with no false success. |
+| 8 | Explicit partial admission | Passed | All configured outcomes are collected, re-admitted once, reason-coded, and unusable cohorts are rejected. |
+| 9 | Deterministic sanitized manifest | Passed | Canonical JSON excludes caller tracebacks, paths, timestamps, reprs, sets, NaN, and infinity. |
+| 10 | One downstream membership | Passed | Summary, labels, patches, stain fitting, and benchmarking consume the final admitted sequence and manifest-owned oncology subset. |
+| 11 | Structured stage diagnostics | Passed | `StageValidationError` exposes stage, subject, observed count/shape, minimum, and corrective guidance. |
+| 12 | Data/label/patch empty boundaries | Passed | Empty inputs fail before loader, directory, stack, cache, or writer seams. |
+| 13 | LOSO and fold boundaries | Passed | Empty/one-slide LOSO fails early; nested LOSO requires three slides before task preprocessing. |
+| 14 | Prediction and target boundaries | Passed | Empty CNN/RF inputs and regression selections fail before device/model/estimator work. |
+| 15 | Foundation boundaries | Passed | Empty embeddings/tasks/probes and malformed explicit configs fail before encoder/cache/model work. |
+| 16 | Guard-before-expense ordering | Passed | Forbidden directory, cache, device, model, encoder, estimator, probe, DataFrame, output, and writer seams remain unreachable. |
+| 17 | Label publication ordering | Passed | Every admitted slide frame validates before output-directory creation or any table write. |
+| 18 | CNN target-before-device ordering | Passed | Classification/regression target selection precedes device resolution and model construction. |
+| 19 | Public compatibility | Passed | Valid signatures, lazy exports, environment flags, output names, fold order, task names, and return schemas remain stable. |
+| 20 | Deep review closure | Passed | WR-01 through WR-07 and IN-01 are closed against actual code and adversarial tests. |
+| 21 | Focused Phase 2 gate | Passed | 119 offline tests passed in 5.66 seconds. |
+| 22 | Canonical fast gate | Passed | Ruff passed first; all 157 offline tests passed in 6.92 seconds. |
 
 ## Plan Must-Haves
 
 ### Plan 02-01 — Configuration contract
 
-- **D-01 — Gap:** ordinary YAML and plain-dictionary defects aggregate in
-  deterministic order, but hostile primitive subclasses raise their own
-  exceptions and escape `ConfigValidationError`.
-- **D-02 — Gap:** valid plain mappings canonicalize deterministically and remain
-  JSON-safe, but subclasses of admitted primitives are operated on before the
-  unsupported-object rejection pass.
-- **D-05 — Passed for the facade:** `load_config(path=None)` and custom paths
-  return fresh plain dictionaries; existing keys remain and only
-  `cohort_policy.allow_partial=false` was added to the default YAML.
+- **D-01 — Passed:** every safely discoverable defect aggregates once in
+  deterministic schema order; hostile allowed-type subclasses cannot escape
+  the domain boundary.
+- **D-02 — Passed:** successful resolution is deterministic and strictly
+  JSON-safe, preserves list order, rejects unsupported values without executing
+  them, and returns fresh mutable compatibility trees.
+- **D-05 — Passed:** `load_config(path=None)`, custom paths, existing keys, and
+  ordinary dictionary behavior remain compatible.
 
 ### Plan 02-02 — Cohort admission
 
-- **D-02 — Passed:** `AdmittedRun` combines canonical `ResolvedConfig` with an
-  ordered, JSON-safe `cohort-manifest-v1`; configuration order controls every
-  manifest collection.
-- **D-03 — Passed:** known missing members aggregate in strict mode; provisional
-  remote admission publishes nothing; strict source acquisition stops at the
-  first documented source failure; partial mode collects all outcomes and
-  re-admits once.
-- **D-05 — Passed:** the runner path, environment flags, stage order, public
-  imports, helper signatures, and output names remain compatible for valid
-  calls, and one final admitted sequence drives downstream stages.
+- **D-02 — Passed:** every admitted run contains canonical resolved config and
+  an ordered deterministic manifest.
+- **D-03 — Passed:** strict known-missing admission aggregates before work;
+  strict remote source failure is fail-fast; explicit partial mode collects all
+  outcomes and publishes only final admission.
+- **D-05 — Passed:** the runner entry point, flags, stage order, output names,
+  helper signatures, and public imports remain stable while one admitted
+  sequence controls downstream work.
 
 ### Plan 02-03 — Empty scientific boundaries
 
-- **D-04 — Passed:** configured/preprocessing/summary cohorts, label frames,
-  regression targets, spot coordinates, patch cohorts, stain inputs, datasets,
-  aligned sets, LOSO inputs, CNN/RF members, prediction batches, embedding
-  batches, task filters, probe inputs, and nested LOSO admission raise
-  structured `StageValidationError` at their tested public boundaries.
-- **D-03 — Passed:** empty or one-slide LOSO inputs cannot reach cache, device,
-  model, encoder, estimator, output-directory, or writer seams; nested LOSO
-  requires three unique non-empty slides before task preprocessing.
-- **D-05 — Passed for valid non-empty calls:** signatures, fold order, task
-  names, return schemas, patch shapes, output names, notebook order, and lazy
-  exports remain compatible. The explicit-empty configuration defect is
-  separately recorded as G-02/T-01.
+- **D-04 — Passed:** every named empty cohort, fold, aligned set, patch set,
+  prediction batch, and regression-target selection fails at its earliest
+  public boundary with structured evidence.
+- **D-03 — Passed:** empty or undersized LOSO inputs cannot reach cache, device,
+  encoder, model, estimator, output-directory, or writer work.
+- **D-05 — Passed:** valid non-empty signatures, outputs, task modes, schemas,
+  notebook order, and public imports remain compatible.
+
+### Plan 02-04 — Verification gap closure
+
+- **G-01 / D-01 / D-02 / T-02 — Passed:** exact-type gates precede every
+  caller-controlled operation and hostile subclasses fail deterministically.
+- **G-02 / T-01 / D-05 — Passed:** only omitted config loads defaults; explicit
+  invalid mappings fail before all foundation/report effects.
+- **VAL-03 / VAL-04 compatibility — Passed:** the closure changes neither
+  admitted cohort behavior nor valid empty-boundary/public behavior.
 
 ## D-01 Through D-05
 
 | Decision | Result | Evidence |
 |---|---:|---|
-| D-01 aggregate startup validation | Gap | Plain configs aggregate; hostile primitive subclasses escape with `RuntimeError`. |
-| D-02 canonical admitted run | Gap | Plain canonical output and manifests are deterministic; hostile allowed-type subclasses are invoked before rejection. |
-| D-03 fail-closed cohort policy | Passed | Strict known availability aggregates; strict remote failure is fail-fast; partial mode records complete outcomes. |
-| D-04 empty-boundary errors | Passed | All named boundary and forbidden-seam tests pass with structured primitive diagnostics. |
-| D-05 compatibility | Passed with warning | Valid public behavior is stable; G-02 remains for explicit empty foundation/report configs. |
+| D-01 aggregate startup validation | Passed | Aggregate plain and hostile-type diagnostics are deterministic and precede side effects. |
+| D-02 canonical admitted run | Passed | Resolved config and manifest are immutable/canonical internally and JSON-safe. |
+| D-03 fail-closed cohort policy | Passed | Strict and partial source/cache admission preserve complete ordered evidence. |
+| D-04 empty-boundary errors | Passed | All named stage inputs fail with stable structured diagnostics before expensive work. |
+| D-05 compatibility | Passed | Existing valid notebook, CLI, config, import, output, and function contracts remain stable. |
 
 ## Threat Controls T-01 Through T-05
 
 | Threat | Result | Evidence |
 |---|---:|---|
-| T-01 invalid config reaches side effects | Gap | The runner validates normally, but foundation helpers still reload defaults for explicit `{}` and may approach model/cache work. |
-| T-02 arbitrary or unstable canonical state | Gap | Canonical plain data is stable, but hostile primitive subclasses can execute overridden methods during admission validation. |
-| T-03 missing slides silently dropped | Passed | Strict admission and strict downstream helpers fail visibly; no catch-and-continue policy remains in the reviewed cohort helpers. |
-| T-04 partial mode obscures exclusions | Passed | Explicit opt-in preserves configured, included, skipped, and failed records with stable sanitized reasons. |
-| T-05 empty work reaches expensive code | Passed | Forbidden directory, loader, stack, cache, device, model, encoder, estimator, probe, and writer seams remain unreachable in focused adversarial tests. |
+| T-01 invalid config reaches side effects | Passed | Startup and direct foundation/report helpers resolve explicit mappings before observable effects. |
+| T-02 arbitrary or unstable canonical state | Passed | Exact-type admission rejects hostile subclasses without executing their behavior; canonical values contain only safe primitives. |
+| T-03 missing slides silently dropped | Passed | Strict admission and downstream helpers fail visibly; partial policy exists only at admission. |
+| T-04 partial mode obscures exclusions | Passed | Explicit opt-in retains complete configured, included, skipped, and failed collections with stable reasons. |
+| T-05 empty work reaches expensive code | Passed | All tested empty boundaries stop before scientific, model, cache, or writer seams. |
 
 ## Roadmap Success Criteria
 
-1. **Gap:** normal invalid sections, keys, plain types, values, and cross-field
-   combinations fail together with actionable paths; hostile subclasses of
-   otherwise allowed primitives do not.
-2. **Passed:** every named empty cohort/fold/aligned/patch/prediction/target
-   boundary has structured early-failure evidence and corrective guidance.
-3. **Passed:** strict known-missing admission fails before member processing;
-   explicit partial mode records configured, included, skipped, and failed
-   slides, while strict remote source failure publishes no false manifest.
-4. **Passed:** successful runs expose canonical resolved configuration and a
-   deterministic cohort manifest suitable as later provenance/fingerprint input.
+1. **Passed:** invalid sections, keys, exact/plain and hostile-subclass types,
+   values, and cross-field combinations fail together at startup with
+   actionable paths, expected constraints, and guidance.
+2. **Passed:** empty cohorts, folds, aligned sets, patch sets, prediction
+   batches, and regression-target selections fail at their public boundary.
+3. **Passed:** missing configured slides fail before locally knowable work by
+   default; explicit partial mode records configured, included, skipped, and
+   failed outcomes; strict remote failure publishes no false manifest.
+4. **Passed:** every admitted run exposes canonical resolved configuration and
+   a deterministic cohort manifest for later provenance and fingerprints.
 
 ## Requirement Status
 
-- **VAL-01 — Gap:** the ordinary YAML/startup surface is comprehensive, but the
-  public resolver's type contract is not total for hostile primitive subclasses.
+- **VAL-01 — Passed:** startup resolution validates the complete configuration
+  contract, aggregates actionable errors, safely rejects hostile subclasses,
+  and admits only deterministic JSON-safe state.
 - **VAL-03 — Passed:** all required empty scientific boundaries fail before
-  expensive execution with stage-specific diagnostics.
+  expensive execution with domain-specific structured errors.
 - **VAL-04 — Passed:** strict missing-slide behavior, explicit partial mode,
-  complete manifest outcomes, final-membership propagation, source fail-fast,
-  and no-false-manifest behavior are verified.
+  complete reason-coded manifests, final-membership propagation, and remote
+  source fail-fast/no-false-manifest behavior are verified.
 
 ## Deep Review Closure
 
-WR-02 through WR-07 and IN-01 were replayed and are closed:
+- **WR-01:** exact-type admission, oversized-number handling, inert rendering,
+  and deterministic invalid-key ordering are all closed.
+- **WR-02:** availability/failure evidence validates before normalization and
+  manifests contain only sanitized deterministic details.
+- **WR-03:** strict curation stops at the first documented source error and
+  later members are `source_not_attempted`.
+- **WR-04:** only documented acquisition failures enter cohort policy;
+  preprocessing, programming, and storage defects propagate.
+- **WR-05:** all label frames validate before publication.
+- **WR-06:** CNN targets resolve before device/model work.
+- **WR-07:** nested LOSO requires three slides before task/probe work.
+- **IN-01:** adversarial behavior now covers hostile allowed-type subclasses,
+  explicit malformed configs, forbidden seams, strict/partial exact manifests,
+  sanitization, and valid compatibility paths.
 
-- admission evidence is exact-type checked before hashing for availability;
-- failure details are sanitized and canonical manifests contain no caller
-  traceback, path, timestamp, exception representation, NaN, or infinity;
-- strict source acquisition stops on the first documented source error and
-  later slides are `source_not_attempted`;
-- programming, preprocessing, and storage failures are not converted into
-  partial-cohort policy;
-- all slide label frames validate before output-directory or writer access;
-- CNN regression-target selection precedes device/model construction;
-- nested LOSO requires three slides before preprocessing or probe fitting;
-- exact strict/partial manifest collections and forbidden seams are covered.
+## Automated Evidence
 
-WR-01 is only partially closed. Oversized built-in integers, hostile ordinary
-objects, invalid-key representations/comparisons, and deterministic primitive
-key ordering are fixed, but hostile subclasses of allowed primitives still
-execute methods. G-01 is therefore a residual WR-01 gap.
-
-## Automated Checks
-
-| Check | Result | Evidence |
-|---|---:|---|
-| `python scripts/verify.py fast` | Passed | Ruff passed first; 146 offline tests passed in 5.31 s. |
-| Focused Phase 2 plus compatibility suite | Passed | 108 offline tests passed in 4.63 s. |
-| Adversarial aggregate/canonicalization suite | Passed with uncovered gap | Existing hostile repr/key/oversized tests pass; independent primitive-subclass probes fail as G-01. |
-| Strict and partial cohort admission | Passed | Exact ordered manifests, unusable partial rejection, fail-fast strict curation, and complete partial outcomes pass. |
-| Provisional/no-false-manifest behavior | Passed | Provisional admission writes nothing; strict source failure reaches no stage/output seam and prints no completion. |
-| Empty public-boundary suite | Passed | 36 focused boundary tests plus affected foundation/model tests pass. |
-| Public import compatibility | Passed | Existing lazy exports remain callable and the runner import defers the named heavy model/scientific stages. |
-| `git diff --check e3866f0^..HEAD` | Warning | Review metadata contains trailing whitespace and a final extra blank line; no source defect. |
+| Command or probe | Result |
+|---|---:|
+| `python scripts/verify.py fast` | Passed: Ruff + 157 offline tests |
+| Focused validation/empty/foundation/admission/CLI/model gate | Passed: 119 tests |
+| Original `EvilInt` and `EvilStr` probes | Passed: deterministic `ConfigValidationError`, no hostile execution |
+| Four explicit `{}` foundation/report probes with forbidden seams | Passed: four early `ConfigValidationError` results |
+| Phase 2 truthiness-fallback `rg` audit | Passed: no matches |
+| `git diff --check 65cbeb0..HEAD` | Passed |
 
 ## Warnings
 
-- The local verifier ran Python 3.12 while required CI declares Python 3.11;
+- Verification ran on Python 3.12 while required CI declares Python 3.11;
   Phase 10 owns environment reconciliation.
-- Pandas warned that optional `numexpr` and `bottleneck` accelerators are old.
+- Pandas reports old optional `numexpr` and `bottleneck` accelerators.
 - Six legacy pharma notebooks still emit missing-cell-ID warnings.
-- The direct runner has no `--help` parser; the established CLI contract is the
-  path and environment-flag entry point, which remains unchanged.
-- Review documentation has minor whitespace errors reported by
-  `git diff --check`; implementation source and tests are clean.
+- Network, executable-notebook, model-download, and full-cohort tiers remain
+  explicit non-gating evidence, as required by Phase 1.
 
 ## Human Verification
 
-No human-only acceptance item is required. Both gaps are deterministic and can
-be closed with offline tests. Network, full-cohort, and model-download execution
-remain explicit non-gating tiers.
+No human-only item or unresolved gap remains. All Phase 2 acceptance behavior is
+covered by deterministic offline tests and independently replayed adversarial
+probes.
 
 ---
 
-*Independent verification completed 2026-07-17.*
+*Independent re-verification completed 2026-07-17.*

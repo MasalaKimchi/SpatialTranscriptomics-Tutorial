@@ -17,6 +17,7 @@ Reported spatial and machine-learning results must be scientifically trustworthy
 - ✓ The pharma package exposes lightweight imports and focused foundation-model tests pass without eagerly importing Scanpy — existing.
 - ✓ Repository-relative paths, deterministic NumPy/Python seeds, configurable experiments, and committed figure previews are established conventions — existing.
 - ✓ Fast CPU/offline verification now runs Ruff plus 58 fixture-backed unit, artifact, synthetic AnnData, model/fold, and notebook-structure checks; network and full-cohort tiers are explicit opt-ins — validated in Phase 1.
+- ✓ Experiment startup now aggregates configuration defects, admits cohorts fail-closed by default, records explicit partial-cohort outcomes, and rejects empty work at public scientific boundaries — validated in Phase 2.
 
 ### Active
 
@@ -27,15 +28,12 @@ Reported spatial and machine-learning results must be scientifically trustworthy
 - [ ] Enforce one-to-one, complete label/patch alignment with actionable errors.
 - [ ] Fingerprint caches against configuration, source data, and relevant code contracts.
 - [ ] Make cache and result writes atomic and validate completed artifacts.
-- [ ] Validate the complete experiment configuration before pipeline execution.
 - [ ] Seed PyTorch, data loaders, workers, and deterministic backend policy centrally.
-- [ ] Reject empty cohorts, folds, patch sets, and prediction batches early.
 - [ ] Validate class support and unseen-class coverage for every LOSO fold.
 - [ ] Fit regression-target scaling only on training data and invert it for reports.
 - [ ] Fit RF imputation and feature schema only on training data.
 - [ ] Preserve fixed physical context at image borders and record patch-quality flags.
 - [ ] Validate Macenko inputs and numerical outputs with explicit fallback provenance.
-- [ ] Fail on missing configured slides unless partial-cohort mode is explicitly enabled.
 - [ ] Add confidence, abstention, and provenance to heuristic scientific labels.
 - [ ] Adapt preprocessing dimensions safely after QC and record resolved parameters.
 - [ ] Consolidate supported Python/dependency declarations and produce a reproducible environment contract.
@@ -69,7 +67,7 @@ The GSD codebase map identifies a linear notebook workflow at the repository roo
 | Use fine-grained GSD planning with automatic advancement | Keeps 20 changes reviewable while allowing autonomous execution | — Pending |
 | Build synthetic fixtures before expensive integration tests | Enables leakage and artifact-contract tests without downloads | ✓ Validated in Phase 1: strict offline tiers, deterministic fixtures, and 58 tests |
 | Treat cache/checkpoint safety as documented migrations | Secure formats may invalidate legacy artifacts and require regeneration | — Pending |
-| Preserve existing notebook and CLI surfaces | Reliability work should not become a user-facing redesign | — Pending |
+| Preserve existing notebook and CLI surfaces | Reliability work should not become a user-facing redesign | ✓ Preserved through Phases 1-2 while tightening default validation and admission |
 
 ## Evolution
 
@@ -89,4 +87,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-17 after Phase 1 verification*
+*Last updated: 2026-07-17 after Phase 2 verification*
