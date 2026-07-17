@@ -37,7 +37,7 @@ created: 2026-07-17
 | 4-02-02 | 02 | 2 | ART-03, ART-04 | T-06, T-07 | Patch/index and embedding artifacts reject legacy/stale/wrong-key/shape/dtype/identity payloads before consumer work | integration | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_adapters.py -k "patch or index or embedding"` | ❌ W0 | ⬜ pending |
 | 4-02-03 | 02 | 2 | ART-03 | T-02, T-07 | Acquisition regenerates stale/legacy scientific caches while train-only/direct reads fail with guidance and transitive lineage misses | orchestration | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_adapters.py projects/spatial-pharma-dl/tests/test_artifact_orchestration.py -k "regenerate or train_only or lineage or stale"` | ❌ W0 | ⬜ pending |
 | 4-03-01 | 03 | 3 | ART-03, ART-04 | T-06, T-08 | Checkpoints and benchmark/report tables validate contract/state/table schemas without claiming Phase 5 deserialization safety | integration | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_adapters.py -k "checkpoint or benchmark or report"` | ❌ W0 | ⬜ pending |
-| 4-03-02 | 03 | 3 | ART-04 | T-04, T-08 | Cohort/preprocessing/experiment manifests and summaries publish atomically with unchanged inner schemas and no reader/writer bypass | orchestration/static | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_orchestration.py -k "manifest or summary or bypass or pipeline"` | ❌ W0 | ⬜ pending |
+| 4-03-02 | 03 | 3 | ART-04 | T-04, T-08 | Cohort/preprocessing/experiment manifests, summaries, training history, and foundation result tables publish atomically with unchanged inner schemas and no reader/writer bypass | orchestration/static | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_orchestration.py -k "manifest or summary or training_history or foundation_result or bypass or pipeline"` | ❌ W0 | ⬜ pending |
 | 4-03-03 | 03 | 3 | ART-03, ART-04 | T-01–T-08 | Cross-artifact lineage, crash recovery, compatibility, and all prior guarantees remain green | regression | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_contract.py projects/spatial-pharma-dl/tests/test_artifact_adapters.py projects/spatial-pharma-dl/tests/test_artifact_orchestration.py projects/spatial-pharma-dl/tests/test_artifact_roundtrips.py projects/spatial-pharma-dl/tests/test_foundation.py projects/spatial-pharma-dl/tests/test_cohort_admission.py && python scripts/verify.py fast` | ✅ | ⬜ pending |
 
 ## Wave 0 Requirements
@@ -69,7 +69,7 @@ All Phase 4 acceptance behavior is automated under `tmp_path` with synthetic loc
 - [x] Every requirement, success criterion, and context decision has automated evidence.
 - [x] No three consecutive implementation tasks lack focused automated verification.
 - [x] Missing test modules are explicit Wave 0 deliverables.
-- [x] Every publication fault point is exercised for new and replacement destinations.
+- [x] Every publication fault point is exercised for new and replacement destinations, including the valid-new-generation state possible after manifest replacement but before a successful final directory fsync.
 - [x] Both relevant invalidation and irrelevant stability are required per artifact kind.
 - [x] Full fast-tier latency target remains under 300 seconds.
 - [x] `nyquist_compliant: true` is set.
