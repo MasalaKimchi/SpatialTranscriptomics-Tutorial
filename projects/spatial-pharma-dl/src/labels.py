@@ -17,6 +17,7 @@ from .data import (
     _processed_fingerprint,
     load_config,
     load_slide,
+    pharma_outputs_dir as _pharma_outputs_dir,
     tumor_type_for_slide,
 )
 from .identity import align_labels_with_metadata, validate_anndata_spot_identity
@@ -50,6 +51,9 @@ _LABEL_COLUMNS = (
     "tme_class_id",
 )
 _DOMAIN_COLUMNS = ("slide_id", "cluster", "domain_name", "tme_class")
+
+# Compatibility alias retained for notebooks and tests that patch this seam.
+pharma_outputs_dir = _pharma_outputs_dir
 
 
 def _output_path(filename: str) -> Path:

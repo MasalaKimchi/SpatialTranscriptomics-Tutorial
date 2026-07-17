@@ -20,7 +20,12 @@ from sklearn.linear_model import LogisticRegression, RidgeCV
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .data import load_config, pharma_processed_path, safe_filename
+from .data import (
+    load_config,
+    pharma_processed_dir as _pharma_processed_dir,
+    pharma_processed_path,
+    safe_filename,
+)
 from .device import device_label, resolve_device
 from .eval import classification_metrics, regression_metrics
 from .identity import (
@@ -39,6 +44,9 @@ from utils.artifacts import (
     build_fingerprint,
     publish_artifact,
 )
+
+# Compatibility alias retained while pure cache paths use pharma_processed_path.
+pharma_processed_dir = _pharma_processed_dir
 
 
 @dataclass(frozen=True)

@@ -247,7 +247,7 @@ def test_preprocess_cohort_wraps_only_documented_source_acquisition_failures(
 ) -> None:
     from src import data
 
-    monkeypatch.setattr(data, "pharma_processed_dir", lambda: tmp_path)
+    monkeypatch.setattr(data.st, "project_root", lambda: tmp_path)
     monkeypatch.setattr(
         data.st,
         "load_visium_sample",
@@ -255,7 +255,7 @@ def test_preprocess_cohort_wraps_only_documented_source_acquisition_failures(
     )
 
     with pytest.raises(data.SourceAcquisitionError) as caught:
-        data.preprocess_cohort(["slide_a"], cfg={"unused": True})
+        data.preprocess_cohort(["slide_a"], cfg=data.load_config())
     assert isinstance(caught.value.__cause__, RequestsConnectionError)
     assert "private host" not in str(caught.value)
 
@@ -266,7 +266,7 @@ def test_preprocess_cohort_wraps_only_documented_source_acquisition_failures(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("writer failed")),
     )
     with pytest.raises(OSError, match="writer failed"):
-        data.preprocess_cohort(["slide_a"], cfg={"unused": True})
+        data.preprocess_cohort(["slide_a"], cfg=data.load_config())
 
 
 def test_runner_resolves_quick_and_foundation_overrides_before_admission(
