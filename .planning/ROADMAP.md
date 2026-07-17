@@ -12,7 +12,7 @@ This milestone adds a thin reliability spine beneath the existing notebook-first
 - Decimal phases (2.1, 2.2): Urgent insertions, if later required.
 
 - [x] **Phase 1: Offline Verification Harness** - Establish representative, tiered, CPU/offline evidence for every later reliability change. (completed 2026-07-17)
-- [ ] **Phase 2: Validated Run and Cohort Admission** - Reject invalid experiments and resolve cohort membership before expensive work.
+- [x] **Phase 2: Validated Run and Cohort Admission** - Reject invalid experiments and resolve cohort membership before expensive work. (completed 2026-07-17)
 - [ ] **Phase 3: Identity and Adaptive Preprocessing** - Guarantee sample alignment and scientifically viable post-QC dimensions.
 - [ ] **Phase 4: Durable Artifact Contract** - Accept only fingerprint-matched, complete, schema-valid artifacts.
 - [ ] **Phase 5: Safe Cache and Checkpoint Formats** - Remove unsafe deserialization from supported patch and model artifact paths.
@@ -52,7 +52,7 @@ This milestone adds a thin reliability spine beneath the existing notebook-first
   3. Missing configured slides fail before processing by default; explicit partial-cohort mode records configured, included, skipped, and failed slides.
   4. Each admitted run exposes a canonical resolved configuration and cohort manifest for downstream provenance and fingerprints.
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 ### Phase 3: Identity and Adaptive Preprocessing
 
@@ -184,7 +184,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Offline Verification Harness | 3/3 | Complete    | 2026-07-17 |
-| 2. Validated Run and Cohort Admission | 2/3 | In Progress|  |
+| 2. Validated Run and Cohort Admission | 3/3 | Complete   | 2026-07-17 |
 | 3. Identity and Adaptive Preprocessing | 0/TBD | Not started | - |
 | 4. Durable Artifact Contract | 0/TBD | Not started | - |
 | 5. Safe Cache and Checkpoint Formats | 0/TBD | Not started | - |

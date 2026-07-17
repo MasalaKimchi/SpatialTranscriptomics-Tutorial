@@ -25,7 +25,7 @@ Exactly 20 high-priority updates are committed to this milestone.
 
 - [x] **VAL-01**: The resolved experiment configuration is validated at startup for required sections, allowed values, types, positive ranges, and cross-field constraints with actionable errors.
 - [ ] **VAL-02**: Label and patch metadata must have non-null unique `(slide_id, spot_id)` keys and align one-to-one without silent row loss, duplication, or cross-slide mismatch.
-- [ ] **VAL-03**: Empty configured cohorts, folds, aligned spot sets, patch sets, prediction batches, and regression-target selections fail before expensive execution with domain-specific errors.
+- [x] **VAL-03**: Empty configured cohorts, folds, aligned spot sets, patch sets, prediction batches, and regression-target selections fail before expensive execution with domain-specific errors.
 - [x] **VAL-04**: The pipeline fails when configured slides are missing unless explicit partial-cohort mode is enabled, and every run records included, skipped, and failed slides in a cohort manifest.
 - [ ] **VAL-05**: Preprocessing validates post-QC spot/gene counts, safely resolves HVG/PCA/neighbor dimensions, and records the actual parameters used in AnnData and run provenance.
 
@@ -83,7 +83,7 @@ Exactly 20 high-priority updates are committed to this milestone.
 | ART-04 | Phase 4 | Pending |
 | VAL-01 | Phase 2 | Complete |
 | VAL-02 | Phase 3 | Pending |
-| VAL-03 | Phase 2 | Pending |
+| VAL-03 | Phase 2 | Complete |
 | VAL-04 | Phase 2 | Complete |
 | VAL-05 | Phase 3 | Pending |
 | REPRO-01 | Phase 6 | Pending |
