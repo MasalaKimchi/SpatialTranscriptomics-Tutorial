@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-07-17T07:10:36.025Z"
+status: executing
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-07-17T07:41:09.597Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 10
   completed_phases: 2
-  total_plans: 7
-  completed_plans: 7
-  percent: 20
+  total_plans: 10
+  completed_plans: 8
+  percent: 80
 ---
 
 # Project State
@@ -21,24 +21,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-17)
 
 **Core value:** Reported spatial and machine-learning results must be scientifically trustworthy, reproducible, and produced from validated artifacts without hidden data leakage.
-**Current focus:** Phase 2 — Validated Run and Cohort Admission
+**Current focus:** Phase 3 — Identity and Adaptive Preprocessing
 
 ## Current Position
 
 Phase: 3
-Plan: Not started
-Status: Phase complete — ready for verification
+Plan: 2 of 3
+Status: In progress — Plan 03-01 complete
 Last activity: 2026-07-17
 
-Progress: [██░░░░░░░░] 20%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 11
-- Average duration: 7 min
-- Total execution time: 0.7 hours
+- Total plans completed: 8
+- Average duration: 9 min
+- Total execution time: 0.8 hours
 
 **By Phase:**
 
@@ -46,12 +46,12 @@ Progress: [██░░░░░░░░] 20%
 |-------|-------|-------|----------|
 | 01 | 3 | 20 min | 7 min |
 | 02 | 4 | 30 min | 8 min |
-| 2 | 4 | - | - |
+| 03 | 1 | 18 min | 18 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 6 min, 6 min, 7 min, 10 min, 7 min
-- Trend: Stable with broader Phase 2 boundary coverage
+- Last 5 plans: 6 min, 7 min, 10 min, 7 min, 18 min
+- Trend: Phase 3 identity boundary added broader adversarial coverage
 
 *Updated after each plan completion*
 
@@ -61,6 +61,7 @@ Progress: [██░░░░░░░░] 20%
 | Phase 02 P02 | 7min | 3 tasks | 6 files |
 | Phase 02 P03 | 10min | 3 tasks | 11 files |
 | Phase 02 P04 | 7min | 2 tasks | 5 files |
+| Phase 03 P01 | 18min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: Zero-row alignment reports cardinality only. — Compound-key diagnosis and repair remain explicitly owned by Phase 3.
 - [Phase 02]: Configuration admits exact safe built-in types before caller value operations. — Hostile subclasses and arbitrary mappings must fail deterministically without executing overrides.
 - [Phase 02]: Only cfg=None loads foundation and report defaults. — Every supplied mapping must resolve before cache, device, model, dataframe, output, or writer work.
+- [Phase 03]: Exact `(slide_id, spot_id)` pairs are the sole alignment identity. — Reject coercion, lossy joins, and spot-only maps before scientific work.
+- [Phase 03]: Metadata owns successful aligned row order. — Source ordinals make array and label provenance inspectable.
 
 ### Pending Todos
 
@@ -106,6 +109,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T07:02:41.798Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-07-17T07:41:09.594Z
+Stopped at: Completed 03-01-PLAN.md
 Resume file: None
