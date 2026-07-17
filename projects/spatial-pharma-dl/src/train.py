@@ -19,8 +19,8 @@ from .labels import (
     tme_class_names,
 )
 from .identity import align_labels_with_metadata
-from .models import build_model
-from .patches import SpotPatchDataset, load_patch_arrays
+from .models import build_model, save_model_checkpoint
+from .patches import SpotPatchDataset, _patch_fingerprint, load_patch_arrays
 from .transforms import NormalizedDataset
 from .validation import require_non_empty
 
@@ -237,9 +237,13 @@ def train_one_fold(
     out_dir = pharma_outputs_dir() / "models"
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / f"{model_name}_{exp}_fold{fold}.pt"
-    torch.save(
-        {
-            "state_dict": model.state_dict(),
+    from .labels import _table_fingerprint
+
+    lineage_slides = [*train_slides, val_slide]
+    save_model_checkpoint(
+        model_path,
+        model=model,
+        metadata={
             "model_name": model_name,
             "experiment": exp,
             "pretrained": pretrained,
@@ -249,8 +253,18 @@ def train_one_fold(
             "reg_cols": reg_cols,
             "val_slide": val_slide,
             "train_slides": train_slides,
+            "fold": fold,
         },
-        model_path,
+        cfg=cfg,
+        upstream_lineage={
+            "patches": {
+                sid: _patch_fingerprint(sid, cfg).digest for sid in lineage_slides
+            },
+            "labels": {
+                sid: _table_fingerprint("label_table", [sid], cfg).digest
+                for sid in lineage_slides
+            },
+        },
     )
 
     return {

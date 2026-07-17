@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,28 @@ from .models import get_gradcam_layer
 from .patches import patch_features
 from .transforms import imagenet_normalize
 from .validation import StageValidationError, require_non_empty, resolve_config
+from utils.artifacts import (
+    ARTIFACT_CONTRACT_VERSIONS,
+    ArtifactFingerprint,
+    ArtifactValidationError,
+    admit_artifact,
+    build_fingerprint,
+    manifest_path,
+    parse_manifest_bytes,
+    publish_artifact,
+)
+
+
+BENCHMARK_REPORT_COLUMNS = (
+    "model",
+    "fold",
+    "val_slide",
+    "balanced_accuracy",
+    "macro_f1",
+    "mean_pearson_r",
+    "mean_r2",
+    "experiment",
+)
 
 
 @torch.no_grad()
@@ -264,6 +287,8 @@ def save_benchmark_report(
     rows: list[dict],
     path: Path | None = None,
     cfg: dict[str, Any] | None = None,
+    *,
+    upstream_lineage: dict[str, object] | None = None,
 ) -> Path:
     if cfg is None:
         cfg = load_config()
@@ -274,5 +299,315 @@ def save_benchmark_report(
         path = pharma_outputs_dir() / f"benchmark_report_{exp}.csv"
     df = pd.DataFrame(rows)
     df["experiment"] = cfg.get("experiment", "v2")
-    df.to_csv(path, index=False)
+    df = df.loc[:, list(BENCHMARK_REPORT_COLUMNS)]
+    schema = _benchmark_schema(df, cfg)
+    fingerprint = _report_fingerprint(
+        df, cfg, upstream_lineage=upstream_lineage or {}
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    publish_artifact(
+        path,
+        artifact_kind="report",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["report"],
+        fingerprint=fingerprint,
+        payload_format="csv",
+        payload_schema=schema,
+        write_payload=lambda temporary: df.to_csv(temporary, index=False),
+        reader=lambda temporary: _read_benchmark_payload(temporary, cfg),
+    )
     return path
+
+
+def _benchmark_schema(frame: pd.DataFrame, cfg: dict[str, Any]) -> dict[str, object]:
+    if frame.columns.tolist() != list(BENCHMARK_REPORT_COLUMNS) or frame.empty:
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if frame.columns.duplicated().any() or frame[["model", "val_slide", "experiment"]].isnull().any().any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if any(type(value) is not str or not value for value in frame["model"].tolist()):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if any(type(value) is not str or not value for value in frame["val_slide"].tolist()):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    experiment = cfg.get("experiment", "v2")
+    if any(type(value) is not str or value != experiment for value in frame["experiment"].tolist()):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if not pd.api.types.is_integer_dtype(frame["fold"]) or (frame["fold"] < 0).any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    numeric = list(BENCHMARK_REPORT_COLUMNS[3:7])
+    if any(not pd.api.types.is_numeric_dtype(frame[column]) for column in numeric):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if not np.isfinite(frame[numeric].to_numpy(dtype=np.float64)).all():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if frame.duplicated(["experiment", "model", "fold", "val_slide"]).any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    return {
+        "columns": list(BENCHMARK_REPORT_COLUMNS),
+        "rows": int(len(frame)),
+        "row_identity": frame[["experiment", "model", "fold", "val_slide"]]
+        .to_dict("split")["data"],
+    }
+
+
+def _read_benchmark_payload(path: Path, cfg: dict[str, Any]):
+    frame = pd.read_csv(
+        path,
+        dtype={"model": str, "val_slide": str, "experiment": str},
+    )
+    return frame, _benchmark_schema(frame, cfg)
+
+
+def _report_fingerprint(
+    frame: pd.DataFrame,
+    cfg: dict[str, Any],
+    *,
+    upstream_lineage: dict[str, object],
+) -> ArtifactFingerprint:
+    schema = _benchmark_schema(frame, cfg)
+    return build_fingerprint(
+        "report",
+        {
+            "configuration": cfg,
+            "source": {"report_schema": list(BENCHMARK_REPORT_COLUMNS)},
+            "upstream": upstream_lineage,
+            "identity": {"rows": schema["row_identity"]},
+        },
+    )
+
+
+def _manifest_expected_fingerprint(
+    path: Path,
+    *,
+    kind: str,
+    cfg: dict[str, Any],
+    upstream_lineage: dict[str, object] | None = None,
+):
+    try:
+        raw = manifest_path(path).read_bytes()
+    except FileNotFoundError:
+        reason = "legacy_artifact" if path.is_file() else "missing_payload"
+        raise ArtifactValidationError(reason, artifact_kind=kind, basename=path.name) from None
+    parsed = parse_manifest_bytes(raw, expected_basename=path.name)
+    inputs = parsed.fingerprint.to_dict()["inputs"]
+    inputs["configuration"] = cfg
+    if upstream_lineage is not None:
+        inputs["upstream"] = upstream_lineage
+    return build_fingerprint(
+        kind,
+        {
+            "configuration": inputs["configuration"],
+            "source": inputs["source"],
+            "upstream": inputs["upstream"],
+            "identity": inputs["identity"],
+        },
+    )
+
+
+def load_benchmark_report(
+    path: Path | None = None,
+    cfg: dict[str, Any] | None = None,
+    *,
+    upstream_lineage: dict[str, object] | None = None,
+) -> pd.DataFrame:
+    """Load an exact benchmark table only after contract and lineage admission."""
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    if path is None:
+        path = pharma_outputs_dir() / f"benchmark_report_{resolved.get('experiment', 'v2')}.csv"
+    expected = _manifest_expected_fingerprint(
+        path, kind="report", cfg=resolved, upstream_lineage=upstream_lineage
+    )
+    admission = admit_artifact(
+        path,
+        expected_kind="report",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["report"],
+        expected_fingerprint=expected,
+        reader=lambda candidate: _read_benchmark_payload(candidate, resolved),
+    )
+    frame, schema = admission.value
+    if json.loads(admission.manifest.payload_schema_json) != schema:
+        raise ArtifactValidationError(
+            "payload_schema_mismatch", artifact_kind="report", basename=path.name
+        )
+    return frame
+
+
+def _result_table_schema(frame: pd.DataFrame, table_name: str) -> dict[str, object]:
+    columns = frame.columns.tolist()
+    if type(table_name) is not str or not table_name or frame.empty:
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    if any(type(column) is not str or not column for column in columns) or len(columns) != len(set(columns)):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    if frame.isnull().any().any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    numeric_columns = [column for column in columns if pd.api.types.is_numeric_dtype(frame[column])]
+    if numeric_columns and not np.isfinite(frame[numeric_columns].to_numpy(dtype=np.float64)).all():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    return {
+        "table_name": table_name,
+        "columns": columns,
+        "rows": int(len(frame)),
+        "dtypes": [str(frame[column].dtype) for column in columns],
+    }
+
+
+def save_result_table(
+    frame: pd.DataFrame,
+    path: Path,
+    *,
+    table_name: str,
+    cfg: dict[str, Any] | None = None,
+    upstream_lineage: dict[str, object] | None = None,
+) -> Path:
+    """Atomically publish one named retained CSV result table."""
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    schema = _result_table_schema(frame, table_name)
+    fingerprint = build_fingerprint(
+        "summary",
+        {
+            "configuration": resolved,
+            "source": {"table_name": table_name, "columns": schema["columns"]},
+            "upstream": upstream_lineage or {},
+            "identity": {"rows": schema["rows"]},
+        },
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    publish_artifact(
+        path,
+        artifact_kind="summary",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["summary"],
+        fingerprint=fingerprint,
+        payload_format="csv",
+        payload_schema=schema,
+        write_payload=lambda temporary: frame.to_csv(temporary, index=False),
+        reader=lambda temporary: _read_result_table(temporary, table_name, schema["columns"]),
+    )
+    return path
+
+
+def _read_result_table(path: Path, table_name: str, columns: list[str]):
+    frame = pd.read_csv(path)
+    if frame.columns.tolist() != columns:
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    return frame, _result_table_schema(frame, table_name)
+
+
+def load_result_table(
+    path: Path,
+    *,
+    table_name: str,
+    cfg: dict[str, Any] | None = None,
+    upstream_lineage: dict[str, object] | None = None,
+) -> pd.DataFrame:
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    expected = _manifest_expected_fingerprint(
+        path, kind="summary", cfg=resolved, upstream_lineage=upstream_lineage
+    )
+    parsed = parse_manifest_bytes(manifest_path(path).read_bytes(), expected_basename=path.name)
+    declared = json.loads(parsed.payload_schema_json)
+    if declared.get("table_name") != table_name or type(declared.get("columns")) is not list:
+        raise ArtifactValidationError("payload_schema_mismatch", artifact_kind="summary", basename=path.name)
+    admission = admit_artifact(
+        path,
+        expected_kind="summary",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["summary"],
+        expected_fingerprint=expected,
+        reader=lambda candidate: _read_result_table(candidate, table_name, declared["columns"]),
+    )
+    frame, schema = admission.value
+    if json.loads(admission.manifest.payload_schema_json) != schema:
+        raise ArtifactValidationError("payload_schema_mismatch", artifact_kind="summary", basename=path.name)
+    return frame
+
+
+def _json_payload(value: object, result_name: str) -> tuple[bytes, dict[str, object]]:
+    if type(value) is not dict or any(type(key) is not str for key in value):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    try:
+        raw = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        restored = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary") from None
+    if restored != value:
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    return raw, {"result_name": result_name, "keys": sorted(value)}
+
+
+def save_json_result(
+    value: dict[str, object],
+    path: Path,
+    *,
+    result_name: str,
+    cfg: dict[str, Any] | None = None,
+    upstream_lineage: dict[str, object] | None = None,
+    artifact_kind: str = "summary",
+) -> Path:
+    """Atomically publish a named canonical JSON result or manifest wrapper."""
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    raw, schema = _json_payload(value, result_name)
+    kind = artifact_kind
+    fingerprint = build_fingerprint(
+        kind,
+        {
+            "configuration": resolved,
+            "source": {"result_name": result_name, "inner_payload": value},
+            "upstream": upstream_lineage or {},
+            "identity": {"keys": schema["keys"]},
+        },
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    publish_artifact(
+        path,
+        artifact_kind=kind,
+        contract_version=ARTIFACT_CONTRACT_VERSIONS[kind],
+        fingerprint=fingerprint,
+        payload_format="canonical-json",
+        payload_schema=schema,
+        write_payload=lambda temporary: temporary.write_bytes(raw),
+        reader=lambda temporary: _read_json_result(temporary, result_name, schema["keys"], kind),
+    )
+    return path
+
+
+def _read_json_result(path: Path, result_name: str, keys: list[str], kind: str):
+    try:
+        value = json.loads(path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind=kind) from None
+    raw, schema = _json_payload(value, result_name)
+    del raw
+    if schema["keys"] != keys:
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind=kind)
+    return value, schema
+
+
+def load_json_result(
+    path: Path,
+    *,
+    result_name: str,
+    cfg: dict[str, Any] | None = None,
+    upstream_lineage: dict[str, object] | None = None,
+    artifact_kind: str = "summary",
+) -> dict[str, object]:
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    expected = _manifest_expected_fingerprint(
+        path, kind=artifact_kind, cfg=resolved, upstream_lineage=upstream_lineage
+    )
+    parsed = parse_manifest_bytes(manifest_path(path).read_bytes(), expected_basename=path.name)
+    declared = json.loads(parsed.payload_schema_json)
+    if declared.get("result_name") != result_name or type(declared.get("keys")) is not list:
+        raise ArtifactValidationError("payload_schema_mismatch", artifact_kind=artifact_kind, basename=path.name)
+    admission = admit_artifact(
+        path,
+        expected_kind=artifact_kind,
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS[artifact_kind],
+        expected_fingerprint=expected,
+        reader=lambda candidate: _read_json_result(candidate, result_name, declared["keys"], artifact_kind),
+    )
+    value, schema = admission.value
+    if json.loads(admission.manifest.payload_schema_json) != schema:
+        raise ArtifactValidationError("payload_schema_mismatch", artifact_kind=artifact_kind, basename=path.name)
+    return value

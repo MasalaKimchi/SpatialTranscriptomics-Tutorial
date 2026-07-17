@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src import data, foundation, labels, patches
+from src import data, eval as evaluation, foundation, labels, patches
 from src.validation import finalize_preprocessing_resolution, resolve_post_qc_preprocessing
 from utils import st_helpers as st
 from utils.artifacts import ArtifactValidationError, manifest_path
@@ -199,3 +199,48 @@ def test_embedding_cache_round_trip_is_safe_primitive_npz(tmp_path, monkeypatch)
     np.testing.assert_array_equal(miss, expected)
     np.testing.assert_array_equal(hit, expected)
     assert manifest_path(foundation._embedding_cache_path("slide_a", cfg)).is_file()
+
+
+def test_benchmark_report_round_trip_and_schema_rejection(tmp_path):
+    cfg = data.load_config()
+    rows = [{
+        "model": "cnn", "fold": 0, "val_slide": "slide_a",
+        "balanced_accuracy": 0.5, "macro_f1": 0.4,
+        "mean_pearson_r": 0.3, "mean_r2": 0.2,
+    }]
+    path = tmp_path / "benchmark_report_v2.csv"
+    evaluation.save_benchmark_report(
+        rows, path=path, cfg=cfg, upstream_lineage={"checkpoints": ["abc"]}
+    )
+    restored = evaluation.load_benchmark_report(path, cfg=cfg)
+    assert restored.columns.tolist() == [
+        "model", "fold", "val_slide", "balanced_accuracy", "macro_f1",
+        "mean_pearson_r", "mean_r2", "experiment",
+    ]
+    assert restored.iloc[0]["model"] == "cnn"
+    assert manifest_path(path).is_file()
+
+
+def test_named_summary_table_and_json_round_trip(tmp_path):
+    cfg = data.load_config()
+    table = pd.DataFrame({"fold": [0], "train_loss": [1.0], "val_loss": [2.0]})
+    table_path = tmp_path / "training_history.csv"
+    evaluation.save_result_table(
+        table, table_path, table_name="training_history", cfg=cfg,
+        upstream_lineage={"checkpoints": ["abc"]},
+    )
+    pd.testing.assert_frame_equal(
+        evaluation.load_result_table(
+            table_path, table_name="training_history", cfg=cfg
+        ),
+        table,
+    )
+    json_path = tmp_path / "experiment_v2_summary.json"
+    payload = {"experiment": "v2", "score": 0.5}
+    evaluation.save_json_result(
+        payload, json_path, result_name="experiment_summary", cfg=cfg,
+        upstream_lineage={"report": "abc"},
+    )
+    assert evaluation.load_json_result(
+        json_path, result_name="experiment_summary", cfg=cfg
+    ) == payload
