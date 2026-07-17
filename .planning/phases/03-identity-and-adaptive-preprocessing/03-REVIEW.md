@@ -7,14 +7,14 @@ findings:
   warning: 0
   info: 0
   total: 0
-resolved_findings: 6
+resolved_findings: 7
 ---
 
 # Phase 3 Code Review
 
 **Scope:** Implementation commits after verified plans (`8256f71..4915412`), all Phase 3 context/research/validation/pattern/plan/summary artifacts, the 14 changed production and test files, and the ordinary, foundation, AnnData, H5AD, and run-manifest call chains.
 
-**Result:** Clean after two fix and re-review iterations. All five warnings and the informational evidence defect are resolved, the affected regressions pass, and the canonical fast gate is green.
+**Result:** Clean after three fix and re-review iterations. All five warning findings and both informational findings are resolved, the affected regressions pass, and the canonical fast gate is green.
 
 ## Resolved Warning Findings
 
@@ -92,9 +92,23 @@ resolved_findings: 6
 
 **Resolution:** `842e143` adds ordinal exact-type schema admission before any trusted-name comparison or pandas lookup. Label, metadata, optional raw AnnData, and required persisted AnnData adversaries now reject with structured inert `invalid_type` evidence without executing equality, hashing, repr, str, or metaclass naming hooks; exact-string missing/reserved issue ordering remains unchanged.
 
+## Resolved Informational Finding
+
+### IN-02 — Duplicate required key columns escape the structured schema boundary — Resolved
+
+**Evidence:** `projects/spatial-pharma-dl/src/identity.py:123-145` exact-type-admits column labels but retains duplicates. `_schema_issues()` at lines 148-162 checks only whether each required name is present, not whether it appears exactly once. `_admit_key_rows()` then executes `frame[column].iat[row]` at lines 165-175; with duplicate `slide_id` or `spot_id` columns, pandas returns a DataFrame rather than a Series and `.iat[row]` raises an internal positional-argument `TypeError`. The AnnData path similarly treats duplicate `slide_id` columns as present at lines 477-497 and later handles the returned DataFrame as if it were a Series, producing misleading cell-type evidence rather than a schema issue.
+
+**Reproduction:** Exact built-in DataFrames containing two `slide_id` columns or two `spot_id` columns were passed to `align_labels_with_metadata()`. Both escaped as `TypeError("DataFrame._get_value() missing 1 required positional argument: 'col'")`, not `IdentityValidationError`. An AnnData-like object with duplicate persisted `slide_id` columns produced an `invalid_type` cell issue instead of identifying the ambiguous schema.
+
+**Impact:** The boundary remains fail-closed, so this does not silently align data, but a legal pandas schema shape bypasses deterministic actionable validation and exposes an implementation error. This weakens D-01's explicit compound-identity contract and makes malformed artifacts harder to diagnose.
+
+**Required fix:** During exact-string schema admission, count required and reserved labels by ordinal and require each key column exactly once. Emit a deterministic schema issue such as `duplicate_column` with side/count and bounded ordinal evidence before any `frame[column]` or `obs["slide_id"]` lookup. Add label, metadata, and persisted AnnData tests for duplicate `slide_id` and `spot_id` columns while preserving the existing missing/reserved issue order.
+
+**Resolution:** `0503519` counts excess exact required and reserved columns in fixed trusted-name order after exact-type admission and before any DataFrame selection. Labels, metadata, and persisted AnnData now emit bounded ordinal `duplicate_column` evidence for duplicate `slide_id` and `spot_id`; duplicate reserved columns report excess counts before the existing `reserved_column` issue, with missing/reserved ordering otherwise unchanged.
+
 ## Verification Performed
 
-- Reviewed the complete `8256f71..842e143` production/test/fix diff, `03-REVIEW-FIX.md`, and all Phase 3 planning/evidence artifacts.
+- Reviewed the complete `8256f71..0503519` production/test/fix diff, `03-REVIEW-FIX.md`, and all Phase 3 planning/evidence artifacts.
 - Traced ordinary patch loading, foundation cache hit/miss, label and patch producers, preprocessing orchestration, H5AD restoration, and admitted-order manifest assembly.
 - Re-ran targeted read-only probes for persisted wrong-slide AnnData, impossible stage-count provenance, hostile custom-metaclass values, and oversized/control-character key diagnostics; all original warnings are closed.
 
@@ -109,6 +123,13 @@ resolved_findings: 6
 - Second-iteration affected Phase 3 and boundary regression suite: 177 passed; scoped Ruff passed.
 - Second-iteration canonical `python scripts/verify.py fast`: repository Ruff passed and all 255 strict offline tests passed in 20.49 seconds.
 - Static re-review confirmed `_schema_issues` and AnnData `slide_id` detection iterate and exact-type-admit every column label before required/reserved membership or `obs["slide_id"]` lookup.
+- Independent final focused Phase 3 modules: 98 passed in 18.97 seconds.
+- Independent final canonical `python scripts/verify.py fast`: repository Ruff passed and all 255 strict offline tests passed in 20.20 seconds.
+- Independent probes reconfirmed WR-01 through WR-05 execute no forbidden hooks and exposed IN-02 for duplicate exact required-column labels despite the green suites.
+- Third-iteration duplicate and hostile schema gate: 13 passed, covering both required columns on both alignment sides, both persisted AnnData identity names, reserved-column excess counts, exact missing/reserved ordering, and hostile labels.
+- Third-iteration affected Phase 3 and boundary regression suite: 185 passed; scoped Ruff passed.
+- Third-iteration canonical `python scripts/verify.py fast`: repository Ruff passed and all 263 strict offline tests passed in 19.70 seconds.
+- Static re-review confirmed duplicate schema issues are complete before `frame[column]` or `obs["slide_id"]` selection and no pandas `TypeError` or misleading cell issue can escape for the covered duplicate schemas.
 
 ## Positive Observations
 
@@ -120,4 +141,4 @@ resolved_findings: 6
 
 ## Review Conclusion
 
-Phase 3 is **clean** after the second fix iteration. WR-01 through WR-05 and IN-01 are resolved with adversarial evidence, no warning or informational finding remains in the reviewed call chains, and the phase is ready for independent verification.
+Phase 3 is **clean** after the third fix iteration. WR-01 through WR-05 and IN-01 through IN-02 are resolved with adversarial evidence, no warning or informational finding remains in the reviewed call chains, and the phase is ready for independent verification.
