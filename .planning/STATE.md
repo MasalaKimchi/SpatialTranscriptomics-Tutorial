@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-07-17T09:15:02.875Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-07-17T09:40:30.000Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 10
   completed_phases: 3
   total_plans: 13
-  completed_plans: 11
+  completed_plans: 12
   percent: 30
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 ## Current Position
 
 Phase: 4
-Plan: 2 of 3 in current phase
+Plan: 3 of 3 in current phase
 Status: Ready to execute
 Last activity: 2026-07-17
 
@@ -36,7 +36,7 @@ Progress: [███░░░░░░░] 30%
 
 **Velocity:**
 
-- Total plans completed: 10
+- Total plans completed: 11
 - Average duration: 11 min
 - Total execution time: 1.8 hours
 
@@ -65,6 +65,7 @@ Progress: [███░░░░░░░] 30%
 | Phase 03 P02 | 20min | 3 tasks | 6 files |
 | Phase 03 P03 | 18min | 2 tasks | 3 files |
 | Phase 04 P01 | 16min | 3 tasks | 3 files |
+| Phase 04 P02 | 13min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 04]: Artifact kinds use explicit projection allowlists and contract versions. — Scientific lineage changes invalidate deterministically without presentation-only churn.
 - [Phase 04]: Temporary validation uses the final logical basename and exact reuse reader. — Validated sidecar bytes remain unchanged when the payload and manifest move to final names.
 - [Phase 04]: Checksums do not authenticate pickle-bearing formats. — Phase 5 remains responsible for removing unsafe patch and checkpoint deserialization.
+- [Phase 04]: Cache-only source identity never claims to detect an unobserved remote mutation. — Stable provider/sample identity is always fingerprinted and observed content is included only when it can be supplied again.
+- [Phase 04]: Scientific readers validate manifest-declared schemas after generic byte admission. — A valid checksum cannot bless wrong axes, rows, dtypes, identity, dimensions, or provenance.
+- [Phase 04]: Legacy object patch archives are admitted only as local-writer output. — Generic admission precedes decoding, and Phase 5 remains the required safe-format migration boundary.
+- [Phase 04]: Semantic corruption is not an automatic cache miss. — Acquisition may rebuild missing, legacy, or stale artifacts while checksum-valid reader failures remain visible.
 
 ### Pending Todos
 
@@ -120,6 +125,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T09:14:56.767Z
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-07-17T09:40:30.000Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
