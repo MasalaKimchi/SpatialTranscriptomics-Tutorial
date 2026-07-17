@@ -292,6 +292,15 @@ def _root_h5ad_schema(value, filename: str):
         raise ArtifactValidationError(
             "reader_validation_failed", artifact_kind="root_h5ad", basename=filename
         )
+    if filename in _ROOT_H5AD_CHAIN and (
+        "spatial" not in value.obsm
+        or "spatial" not in value.uns
+        or np.asarray(value.obsm["spatial"]).shape != (value.n_obs, 2)
+        or not np.isfinite(np.asarray(value.obsm["spatial"], dtype=np.float64)).all()
+    ):
+        raise ArtifactValidationError(
+            "reader_validation_failed", artifact_kind="root_h5ad", basename=filename
+        )
     schema = {
         "n_obs": int(value.n_obs),
         "n_vars": int(value.n_vars),

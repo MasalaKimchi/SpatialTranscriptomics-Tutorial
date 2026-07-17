@@ -10,6 +10,7 @@ from typing import Any
 from urllib.error import URLError
 
 import pandas as pd
+import numpy as np
 import yaml
 from requests.exceptions import RequestException
 
@@ -284,6 +285,39 @@ def _processed_schema(adata, sample_id: str) -> dict[str, object]:
             artifact_kind="processed_slide",
             basename=_processed_slide_path(sample_id).name,
         )
+    spatial = np.asarray(adata.obsm["spatial"])
+    pca = np.asarray(adata.obsm["X_pca"])
+    try:
+        image = np.asarray(st.get_image(adata, "hires"))
+        scalefactors = st.get_scalefactors(adata)
+    except (KeyError, TypeError, ValueError):
+        raise ArtifactValidationError(
+            "reader_validation_failed",
+            artifact_kind="processed_slide",
+            basename=_processed_slide_path(sample_id).name,
+        ) from None
+    if (
+        spatial.shape != (adata.n_obs, 2)
+        or pca.ndim != 2
+        or pca.shape[0] != adata.n_obs
+        or image.ndim != 3
+        or image.shape[2] != 3
+        or image.size == 0
+        or not np.issubdtype(spatial.dtype, np.number)
+        or not np.issubdtype(pca.dtype, np.number)
+        or not np.issubdtype(image.dtype, np.number)
+        or not np.isfinite(spatial.astype(np.float64)).all()
+        or not np.isfinite(pca.astype(np.float64)).all()
+        or not np.isfinite(image.astype(np.float64)).all()
+        or type(scalefactors) is not dict
+        or "tissue_hires_scalef" not in scalefactors
+        or "spot_diameter_fullres" not in scalefactors
+    ):
+        raise ArtifactValidationError(
+            "reader_validation_failed",
+            artifact_kind="processed_slide",
+            basename=_processed_slide_path(sample_id).name,
+        )
     canonical = adata.uns.get("spatial_pharma_preprocessing_canonical_json")
     if type(canonical) is not str or len(canonical.encode("utf-8")) > 65_536:
         raise ArtifactValidationError(
@@ -306,7 +340,7 @@ def _processed_schema(adata, sample_id: str) -> dict[str, object]:
         ) from None
     if int(record["counts"]["post_qc_spots"]) != int(adata.n_obs) or int(
         record["counts"]["post_qc_genes"]
-    ) != int(adata.n_vars):
+    ) != int(adata.n_vars) or pca.shape[1] != int(record["resolved"]["pca"]):
         raise ArtifactValidationError(
             "reader_validation_failed",
             artifact_kind="processed_slide",
