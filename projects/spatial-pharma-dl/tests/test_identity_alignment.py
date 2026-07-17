@@ -369,6 +369,103 @@ def test_exact_string_schema_keeps_missing_and_reserved_issue_order():
     ]
 
 
+def _duplicate_column_frame(name: str) -> pd.DataFrame:
+    other = "spot_id" if name == "slide_id" else "slide_id"
+    return pd.DataFrame(
+        [["slide_a", "slide_a", "spot_a"]],
+        columns=[name, name, other],
+    )
+
+
+@pytest.mark.parametrize("duplicate_side", ["labels", "metadata"])
+@pytest.mark.parametrize("column", ["slide_id", "spot_id"])
+def test_alignment_rejects_duplicate_required_columns_before_selection(
+    duplicate_side, column
+):
+    tables = {
+        "labels": pd.DataFrame(
+            {"slide_id": ["slide_a"], "spot_id": ["spot_a"]}
+        ),
+        "metadata": pd.DataFrame(
+            {"slide_id": ["slide_a"], "spot_id": ["spot_a"]}
+        ),
+    }
+    tables[duplicate_side] = _duplicate_column_frame(column)
+
+    with pytest.raises(IdentityValidationError) as caught:
+        align_labels_with_metadata(
+            tables["labels"],
+            tables["metadata"],
+            stage="duplicate_schema",
+        )
+
+    assert len(caught.value.issues) == 1
+    issue = caught.value.issues[0]
+    assert issue.code == "duplicate_column"
+    assert issue.side == duplicate_side
+    assert issue.count == 1
+    assert issue.sample_rows == ((1, column, "builtins.str"),)
+
+
+@pytest.mark.parametrize("column", ["slide_id", "spot_id"])
+def test_persisted_anndata_rejects_duplicate_identity_columns(column):
+    adata = SimpleNamespace(
+        obs_names=pd.Index(["spot_a"], dtype=object),
+        obs=_duplicate_column_frame(column),
+    )
+
+    with pytest.raises(IdentityValidationError) as caught:
+        validate_anndata_spot_identity(
+            adata,
+            "slide_a",
+            stage="duplicate_persisted_schema",
+            require_slide_id=True,
+        )
+
+    issue = caught.value.issues[0]
+    assert issue.code == "duplicate_column"
+    assert issue.side == "anndata_schema"
+    assert issue.count == 1
+    assert issue.sample_rows == ((1, column, "builtins.str"),)
+
+
+@pytest.mark.parametrize(
+    ("side", "reserved"),
+    [("labels", "_label_source_row"), ("metadata", "_patch_source_row")],
+)
+def test_duplicate_reserved_columns_are_counted_before_reserved_issue(
+    side, reserved
+):
+    tables = {
+        "labels": pd.DataFrame(
+            {"slide_id": ["slide_a"], "spot_id": ["spot_a"]}
+        ),
+        "metadata": pd.DataFrame(
+            {"slide_id": ["slide_a"], "spot_id": ["spot_a"]}
+        ),
+    }
+    tables[side] = pd.DataFrame(
+        [["slide_a", "spot_a", 0, 1, 2]],
+        columns=["slide_id", "spot_id", reserved, reserved, reserved],
+    )
+
+    with pytest.raises(IdentityValidationError) as caught:
+        align_labels_with_metadata(
+            tables["labels"],
+            tables["metadata"],
+            stage="duplicate_reserved_schema",
+        )
+
+    assert [(issue.code, issue.count) for issue in caught.value.issues] == [
+        ("duplicate_column", 2),
+        ("reserved_column", 1),
+    ]
+    assert caught.value.issues[0].sample_rows == (
+        (3, reserved, "builtins.str"),
+        (4, reserved, "builtins.str"),
+    )
+
+
 @pytest.mark.parametrize("defect", ["duplicate", "unmatched", "cross_slide"])
 def test_key_diagnostics_escape_controls_and_bound_long_unicode(defect):
     hostile_id = "line\n\t\x00" + "한🚀" * 100_000

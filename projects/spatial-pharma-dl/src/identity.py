@@ -154,10 +154,44 @@ def _schema_issues(frame: pd.DataFrame, side: str) -> list[IdentityIssue]:
             issues.append(
                 IdentityIssue(code="missing_column", side=side, count=1)
             )
+    issues.extend(
+        _duplicate_column_issues(
+            columns,
+            side,
+            names=(*KEY_COLUMNS, *RESERVED_COLUMNS),
+        )
+    )
     for column in RESERVED_COLUMNS:
         if column in columns:
             issues.append(
                 IdentityIssue(code="reserved_column", side=side, count=1)
+            )
+    return issues
+
+
+def _duplicate_column_issues(
+    columns: tuple[str, ...],
+    side: str,
+    *,
+    names: tuple[str, ...],
+) -> list[IdentityIssue]:
+    """Count excess exact-name columns with deterministic ordinal evidence."""
+    issues: list[IdentityIssue] = []
+    for name in names:
+        ordinals = tuple(
+            ordinal for ordinal, label in enumerate(columns) if label == name
+        )
+        if len(ordinals) > 1:
+            issues.append(
+                IdentityIssue(
+                    code="duplicate_column",
+                    side=side,
+                    count=len(ordinals) - 1,
+                    sample_rows=tuple(
+                        (ordinal, name, "builtins.str")
+                        for ordinal in ordinals[1 : _SAMPLE_LIMIT + 1]
+                    ),
+                )
             )
     return issues
 
@@ -483,13 +517,23 @@ def validate_anndata_spot_identity(
             obs.columns,
             "anndata_schema",
         )
+        if not schema_issues:
+            schema_issues.extend(
+                _duplicate_column_issues(
+                    admitted_obs_columns,
+                    "anndata_schema",
+                    names=KEY_COLUMNS,
+                )
+            )
         issues.extend(schema_issues)
-    has_slide_id = not schema_issues and "slide_id" in admitted_obs_columns
-    if require_slide_id and not has_slide_id and not schema_issues:
+    slide_id_count = (
+        admitted_obs_columns.count("slide_id") if not schema_issues else 0
+    )
+    if require_slide_id and slide_id_count == 0 and not schema_issues:
         issues.append(
             IdentityIssue(code="missing_column", side="anndata", count=1)
         )
-    if has_slide_id:
+    if slide_id_count == 1 and not schema_issues:
         persisted_invalid: list[tuple[int, str, str]] = []
         persisted_blank: list[tuple[int, str, str]] = []
         wrong_slide: list[tuple[str, str]] = []
