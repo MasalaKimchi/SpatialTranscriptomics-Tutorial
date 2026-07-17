@@ -154,7 +154,11 @@ def synthetic_anndata_factory() -> Callable[..., Any]:
     """Build a fresh, small Visium-shaped AnnData with deterministic contents."""
 
     def build(
-        *, slide_id: str = "slide_a", seed: int = 101, n_spots: int = 12
+        *,
+        slide_id: str = "slide_a",
+        seed: int = 101,
+        n_spots: int = 12,
+        n_genes: int = 10,
     ) -> Any:
         import anndata as ad
 
@@ -171,6 +175,9 @@ def synthetic_anndata_factory() -> Callable[..., Any]:
             "GAPDH",
             "ACTB",
         ]
+        if not 0 <= n_genes <= len(genes):
+            raise ValueError(f"n_genes must be between 0 and {len(genes)}")
+        genes = genes[:n_genes]
         counts = rng.poisson(4.0, size=(n_spots, len(genes))).astype(np.int32)
         obs_names = [f"{slide_id}_spot_{index:02d}" for index in range(n_spots)]
         obs = pd.DataFrame({"slide_id": slide_id}, index=obs_names)

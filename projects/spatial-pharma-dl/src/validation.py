@@ -149,6 +149,29 @@ class StageValidationError(PharmaValidationError):
         super().__init__(message)
 
 
+class PreprocessingValidationError(PharmaValidationError):
+    """Structured scientific nonviability raised before graph construction."""
+
+    def __init__(
+        self,
+        *,
+        stage: str,
+        reason_code: str,
+        counts: dict[str, int],
+        requested: dict[str, int],
+        guidance: str,
+    ) -> None:
+        self.stage = stage
+        self.reason_code = reason_code
+        self.counts = json.loads(_canonical_json(counts))
+        self.requested = json.loads(_canonical_json(requested))
+        self.guidance = guidance
+        super().__init__(
+            f"{stage}: preprocessing is scientifically nonviable "
+            f"({reason_code}). {guidance}"
+        )
+
+
 def require_non_empty(
     value: object,
     *,
@@ -194,6 +217,218 @@ class ResolvedConfig:
         if not isinstance(value, dict):  # pragma: no cover - constructor invariant
             raise TypeError("Resolved configuration root must be a JSON object.")
         return value
+
+
+@dataclass(frozen=True, slots=True)
+class PreprocessingResolution:
+    """Immutable canonical preprocessing resolution and provenance record."""
+
+    canonical_json: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a fresh exact-built-in primitive tree."""
+        value = json.loads(self.canonical_json)
+        if type(value) is not dict:  # pragma: no cover - constructor invariant
+            raise TypeError("Preprocessing resolution root must be a JSON object.")
+        return value
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def _preprocessing_input_error(field: str) -> PreprocessingValidationError:
+    return PreprocessingValidationError(
+        stage="input",
+        reason_code="invalid_preprocessing_input",
+        counts={},
+        requested={},
+        guidance=f"Provide {field} as an exact nonnegative built-in integer.",
+    )
+
+
+def _admit_preprocessing_int(value: object, field: str, *, positive: bool = False) -> int:
+    if type(value) is not int or value.bit_length() > 4096:
+        raise _preprocessing_input_error(field)
+    if value < (1 if positive else 0):
+        raise _preprocessing_input_error(field)
+    return value
+
+
+def resolve_post_qc_preprocessing(
+    *,
+    slide_id: str,
+    input_spots: int,
+    input_genes: int,
+    after_filter_cells_spots: int,
+    after_filter_cells_genes: int,
+    after_filter_genes_spots: int,
+    after_filter_genes_genes: int,
+    post_qc_spots: int,
+    post_qc_genes: int,
+    requested_hvg: int,
+    requested_pcs: int,
+    requested_neighbors: int,
+    requested_graph_pcs: int,
+) -> PreprocessingResolution:
+    """Resolve the HVG call from observed post-QC cardinalities."""
+    if type(slide_id) is not str or not slide_id.strip():
+        raise _preprocessing_input_error("slide_id")
+    raw_counts = {
+        "input_spots": input_spots,
+        "input_genes": input_genes,
+        "after_filter_cells_spots": after_filter_cells_spots,
+        "after_filter_cells_genes": after_filter_cells_genes,
+        "after_filter_genes_spots": after_filter_genes_spots,
+        "after_filter_genes_genes": after_filter_genes_genes,
+        "post_qc_spots": post_qc_spots,
+        "post_qc_genes": post_qc_genes,
+    }
+    counts = {
+        key: _admit_preprocessing_int(value, key)
+        for key, value in raw_counts.items()
+    }
+    raw_requested = {
+        "hvg": requested_hvg,
+        "pca": requested_pcs,
+        "neighbors": requested_neighbors,
+        "graph_pcs": requested_graph_pcs,
+    }
+    requested = {
+        key: _admit_preprocessing_int(value, f"requested_{key}", positive=True)
+        for key, value in raw_requested.items()
+    }
+    if counts["post_qc_spots"] < 3:
+        raise PreprocessingValidationError(
+            stage="post_qc",
+            reason_code="insufficient_post_qc_spots",
+            counts=counts,
+            requested=requested,
+            guidance="Retain at least three spots after QC or revise the QC thresholds.",
+        )
+    if counts["post_qc_genes"] < 2:
+        raise PreprocessingValidationError(
+            stage="post_qc",
+            reason_code="insufficient_post_qc_genes",
+            counts=counts,
+            requested=requested,
+            guidance="Retain at least two genes after QC or revise the QC thresholds.",
+        )
+    transitions = (
+        ("input_spots", "after_filter_cells_spots"),
+        ("after_filter_cells_spots", "after_filter_genes_spots"),
+        ("after_filter_genes_spots", "post_qc_spots"),
+        ("input_genes", "after_filter_cells_genes"),
+        ("after_filter_cells_genes", "after_filter_genes_genes"),
+        ("after_filter_genes_genes", "post_qc_genes"),
+    )
+    if any(counts[after] > counts[before] for before, after in transitions):
+        raise _preprocessing_input_error("monotonic stage counts")
+    resolved_hvg = min(requested["hvg"], counts["post_qc_genes"])
+    record = {
+        "schema_version": "spatial-pharma-preprocessing-v1",
+        "slide_id": slide_id,
+        "counts": {**counts, "actual_hvgs": None},
+        "exclusions": {
+            "cell_filter": counts["input_spots"] - counts["after_filter_cells_spots"],
+            "gene_filter": counts["after_filter_cells_genes"]
+            - counts["after_filter_genes_genes"],
+            "mitochondrial_filter": counts["after_filter_genes_spots"]
+            - counts["post_qc_spots"],
+            "hvg_not_selected": None,
+        },
+        "requested": requested,
+        "resolved": {
+            "hvg_call": resolved_hvg,
+            "pca": None,
+            "neighbors": None,
+            "graph_pcs": None,
+        },
+        "reasons": {
+            "hvg": (
+                "requested_value_accepted"
+                if resolved_hvg == requested["hvg"]
+                else "requested_value_capped_to_post_qc_genes"
+            ),
+            "pca": None,
+            "neighbors": None,
+            "graph_pcs": None,
+        },
+    }
+    return PreprocessingResolution(_canonical_json(record))
+
+
+def finalize_preprocessing_resolution(
+    resolution: PreprocessingResolution, *, actual_hvgs: int
+) -> PreprocessingResolution:
+    """Resolve legal PCA and graph dimensions from the actual selected HVGs."""
+    if type(resolution) is not PreprocessingResolution:
+        raise _preprocessing_input_error("resolution")
+    actual = _admit_preprocessing_int(actual_hvgs, "actual_hvgs")
+    record = resolution.to_dict()
+    counts = record["counts"]
+    requested = record["requested"]
+    counts["actual_hvgs"] = actual
+    if actual < 2:
+        raise PreprocessingValidationError(
+            stage="post_hvg",
+            reason_code="insufficient_actual_hvgs",
+            counts=counts,
+            requested=requested,
+            guidance="Select at least two variable genes before PCA.",
+        )
+    if actual > counts["post_qc_genes"]:
+        raise _preprocessing_input_error("actual_hvgs")
+    pca_rank_limit = min(counts["post_qc_spots"], actual) - 1
+    resolved_pca = min(requested["pca"], pca_rank_limit)
+    resolved_neighbors = min(requested["neighbors"], counts["post_qc_spots"] - 1)
+    if resolved_pca < 1:
+        raise PreprocessingValidationError(
+            stage="post_hvg",
+            reason_code="no_legal_pca_components",
+            counts=counts,
+            requested=requested,
+            guidance="Retain enough spots and variable genes for at least one component.",
+        )
+    if resolved_neighbors < 2:
+        raise PreprocessingValidationError(
+            stage="post_hvg",
+            reason_code="insufficient_legal_neighbors",
+            counts=counts,
+            requested=requested,
+            guidance="Retain at least three spots for a graph with two neighbors.",
+        )
+    resolved_graph_pcs = min(requested["graph_pcs"], resolved_pca)
+    record["resolved"].update(
+        pca=resolved_pca,
+        neighbors=resolved_neighbors,
+        graph_pcs=resolved_graph_pcs,
+    )
+    record["reasons"].update(
+        pca=(
+            "requested_value_accepted"
+            if resolved_pca == requested["pca"]
+            else "requested_value_capped_to_rank_limit"
+        ),
+        neighbors=(
+            "requested_value_accepted"
+            if resolved_neighbors == requested["neighbors"]
+            else "requested_value_capped_to_spot_limit"
+        ),
+        graph_pcs=(
+            "requested_value_accepted"
+            if resolved_graph_pcs == requested["graph_pcs"]
+            else "requested_value_capped_to_resolved_pcs"
+        ),
+    )
+    record["exclusions"]["hvg_not_selected"] = counts["post_qc_genes"] - actual
+    return PreprocessingResolution(_canonical_json(record))
 
 
 @dataclass(frozen=True, slots=True)
