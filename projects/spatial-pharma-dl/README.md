@@ -83,6 +83,31 @@ Open the notebook workflow with:
 jupyter lab projects/spatial-pharma-dl/notebooks/
 ```
 
+## Verification
+
+The required fast tier is the default CPU/offline check used locally and in CI.
+The notebook-smoke, network, and full-cohort tiers are explicit opt-ins:
+
+```bash
+python scripts/verify.py fast
+python scripts/verify.py notebook-smoke
+python scripts/verify.py network
+python scripts/verify.py full-cohort
+```
+
+For direct debugging from the repository root, use the exact Ruff and strict
+offline pytest commands run by the fast tier:
+
+```bash
+python -m ruff check utils scripts projects/spatial-pharma-dl/src projects/spatial-pharma-dl/scripts projects/spatial-pharma-dl/tests
+python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests
+```
+
+Safe fixture round trips do not certify production cache/checkpoint migration;
+that security migration has separate evidence in its owning phase. Later phases
+extend the same marker/fixture/runner convention instead of creating parallel
+verification entry points.
+
 ## Frozen foundation models
 
 The encoder is always frozen. Patches are embedded once, cached under

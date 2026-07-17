@@ -1,0 +1,97 @@
+name: Verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_notebook_smoke:
+        description: Run the opt-in notebook smoke tier
+        required: false
+        default: false
+        type: boolean
+      run_network:
+        description: Run the opt-in public-network tier
+        required: false
+        default: false
+        type: boolean
+      run_full_cohort:
+        description: Run the opt-in full-cohort tier
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    name: Required fast offline verification
+    runs-on: ubuntu-latest
+    env:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            projects/spatial-pharma-dl/requirements-pharma.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r projects/spatial-pharma-dl/requirements-pharma.txt pytest ruff nbformat
+      - name: Run required fast tier
+        run: python scripts/verify.py fast
+
+  notebook-smoke:
+    name: Opt-in notebook smoke verification
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_notebook_smoke }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            projects/spatial-pharma-dl/requirements-pharma.txt
+      - run: python -m pip install -r requirements.txt -r projects/spatial-pharma-dl/requirements-pharma.txt pytest ruff nbformat
+      - run: python scripts/verify.py notebook-smoke
+
+  network:
+    name: Opt-in network verification
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            projects/spatial-pharma-dl/requirements-pharma.txt
+      - run: python -m pip install -r requirements.txt -r projects/spatial-pharma-dl/requirements-pharma.txt pytest ruff nbformat
+      - run: python scripts/verify.py network
+
+  full-cohort:
+    name: Opt-in full-cohort verification
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_full_cohort }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            projects/spatial-pharma-dl/requirements-pharma.txt
+      - run: python -m pip install -r requirements.txt -r projects/spatial-pharma-dl/requirements-pharma.txt pytest ruff nbformat
+      - run: python scripts/verify.py full-cohort
