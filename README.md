@@ -151,6 +151,12 @@ that security migration has separate evidence in its owning phase. Later phases
 extend the same marker/fixture/runner convention instead of creating parallel
 verification entry points.
 
+The offline guard blocks Python socket connection and name-resolution APIs in
+the pytest process and in child Python interpreters that inherit the harness
+environment. It is a test-harness boundary, not an operating-system sandbox:
+arbitrary native executables are not isolated, so the fast tier must not execute
+untrusted binaries.
+
 ---
 
 ## Repository layout

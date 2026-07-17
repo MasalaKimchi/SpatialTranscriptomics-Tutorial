@@ -28,31 +28,48 @@ class _TinyMultiHeadModel(torch.nn.Module):
         return self.classifier(encoded), self.regressor(encoded)
 
 
-def test_tiny_multi_head_model_completes_one_cpu_optimization_step() -> None:
-    generator = torch.Generator(device="cpu").manual_seed(41)
-    model = _TinyMultiHeadModel().cpu()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
-    images = torch.rand((4, 3, 12, 12), generator=generator)
-    classes = torch.tensor([0, 1, 0, 1], dtype=torch.long)
-    targets = torch.rand((4, 2), generator=generator)
-    before = [parameter.detach().clone() for parameter in model.parameters()]
+def _run_tiny_optimization(seed: int) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    """Run a repeatable step without changing the caller's global RNG state."""
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(seed)
+        model = _TinyMultiHeadModel().cpu()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+        images = torch.rand((4, 3, 12, 12))
+        classes = torch.tensor([0, 1, 0, 1], dtype=torch.long)
+        targets = torch.rand((4, 2))
+        before = [parameter.detach().clone() for parameter in model.parameters()]
 
-    optimizer.zero_grad()
-    class_logits, regression = model(images)
-    loss = torch.nn.functional.cross_entropy(
-        class_logits, classes
-    ) + torch.nn.functional.mse_loss(regression, targets)
-    loss.backward()
-    optimizer.step()
+        optimizer.zero_grad()
+        class_logits, regression = model(images)
+        loss = torch.nn.functional.cross_entropy(
+            class_logits, classes
+        ) + torch.nn.functional.mse_loss(regression, targets)
+        loss.backward()
+        optimizer.step()
 
-    assert class_logits.shape == (4, 2)
-    assert regression.shape == (4, 2)
-    assert torch.isfinite(loss)
-    assert all(parameter.device.type == "cpu" for parameter in model.parameters())
-    assert any(
-        not torch.equal(old, new.detach())
-        for old, new in zip(before, model.parameters(), strict=True)
-    )
+        assert class_logits.shape == (4, 2)
+        assert regression.shape == (4, 2)
+        assert torch.isfinite(loss)
+        assert all(parameter.device.type == "cpu" for parameter in model.parameters())
+        assert any(
+            not torch.equal(old, new.detach())
+            for old, new in zip(before, model.parameters(), strict=True)
+        )
+        return loss.detach().clone(), [
+            parameter.detach().clone() for parameter in model.parameters()
+        ]
+
+
+def test_tiny_multi_head_model_step_is_seeded_and_rng_isolated() -> None:
+    global_state = torch.random.get_rng_state().clone()
+    first_loss, first_parameters = _run_tiny_optimization(seed=41)
+    torch.testing.assert_close(torch.random.get_rng_state(), global_state)
+    second_loss, second_parameters = _run_tiny_optimization(seed=41)
+
+    torch.testing.assert_close(second_loss, first_loss, rtol=0, atol=0)
+    for first, second in zip(first_parameters, second_parameters, strict=True):
+        torch.testing.assert_close(second, first, rtol=0, atol=0)
+    torch.testing.assert_close(torch.random.get_rng_state(), global_state)
 
 
 def test_public_resnet18_shape_smoke_never_requests_weights(monkeypatch) -> None:

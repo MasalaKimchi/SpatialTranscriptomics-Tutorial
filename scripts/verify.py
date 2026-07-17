@@ -63,7 +63,7 @@ def run_tier(tier: str) -> int:
                     "no evidence was produced.",
                     flush=True,
                 )
-                return 0
+                return 5
             return int(exc.returncode or 1)
     return 0
 

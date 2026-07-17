@@ -8,12 +8,17 @@ import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import yaml
 
-from conftest import OfflineNetworkError, _validate_primary_marker_names
+from conftest import (
+    OfflineNetworkError,
+    _validate_primary_marker_names,
+    pytest_configure,
+    pytest_unconfigure,
+)
 
 pytestmark = pytest.mark.offline
 
@@ -49,6 +54,53 @@ def test_offline_socket_apis_fail_closed() -> None:
         socket.create_connection(("192.0.2.1", 443))
     with pytest.raises(OfflineNetworkError, match="offline"):
         socket.socket().connect(("192.0.2.1", 443))
+    with pytest.raises(OfflineNetworkError, match="offline"):
+        socket.socket().connect_ex(("192.0.2.1", 443))
+    with pytest.raises(OfflineNetworkError, match="offline"):
+        socket.getaddrinfo("example.invalid", 443)
+    with pytest.raises(OfflineNetworkError, match="offline"):
+        socket.gethostbyname("example.invalid")
+
+
+def test_offline_guard_propagates_to_python_subprocesses() -> None:
+    probe = """\
+import socket
+
+attempts = (
+    lambda: socket.getaddrinfo("example.invalid", 443),
+    lambda: socket.socket().connect_ex(("192.0.2.1", 443)),
+)
+for attempt in attempts:
+    try:
+        attempt()
+    except RuntimeError as exc:
+        assert "offline" in str(exc).lower()
+    else:
+        raise AssertionError("offline child network guard was bypassed")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_offline_environment_is_restored_after_embedded_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HF_HUB_OFFLINE", "preserve-hf-value")
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    config = SimpleNamespace(option=SimpleNamespace(markexpr="offline"))
+
+    pytest_configure(config)
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+    pytest_unconfigure(config)
+
+    assert os.environ["HF_HUB_OFFLINE"] == "preserve-hf-value"
+    assert "TRANSFORMERS_OFFLINE" not in os.environ
 
 
 def test_bare_pytest_defaults_to_offline(tmp_path: Path) -> None:
@@ -167,7 +219,7 @@ def test_empty_opt_in_tier_is_explicit_non_evidence(
         raise subprocess.CalledProcessError(5, command)
 
     monkeypatch.setattr(verify.subprocess, "run", no_tests)
-    assert verify.run_tier("network") == 0
+    assert verify.run_tier("network") == 5
     output = capsys.readouterr().out
     assert "no tests defined for this opt-in tier" in output
     assert "no evidence was produced" in output
@@ -236,6 +288,7 @@ def test_verification_workflow_contract() -> None:
         assert input_name in gate
         assert _run_commands(job)[-1] == f"python scripts/verify.py {tier}"
         assert "needs" not in job
+        assert job.get("continue-on-error") not in (True, "true")
 
     for job in jobs.values():
         for step in job["steps"]:
@@ -274,3 +327,5 @@ def test_verification_documentation_contract() -> None:
         ) in documentation
         assert "later phases" in documentation
         assert "same marker/fixture/runner convention" in documentation
+        assert "child python interpreters" in documentation
+        assert "not an operating-system sandbox" in documentation

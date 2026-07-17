@@ -6,6 +6,7 @@ import os
 import socket
 import sys
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,9 +20,17 @@ sys.path[:0] = [str(PHARMA), str(ROOT)]
 
 PRIMARY_TIERS = frozenset({"offline", "notebook_smoke", "network", "full_cohort"})
 EXTERNAL_TIERS = frozenset({"network", "full_cohort"})
+OFFLINE_GUARD_PATH = Path(__file__).with_name("offline_guard")
+_MISSING = object()
+_OFFLINE_STATES: dict[int, "_OfflineState"] = {}
 
-_ORIGINAL_SOCKET_CONNECT = socket.socket.connect
-_ORIGINAL_CREATE_CONNECTION = socket.create_connection
+
+@dataclass(frozen=True)
+class _OfflineState:
+    """Exact process state to restore after an embedded pytest session."""
+
+    environment: dict[str, object]
+    socket_functions: dict[str, Callable[..., Any]]
 
 
 class OfflineNetworkError(RuntimeError):
@@ -56,20 +65,76 @@ def _deny_socket(*_args: object, **_kwargs: object) -> None:
     )
 
 
+def _prepend_pythonpath(path: Path) -> None:
+    """Propagate the Python socket guard to child Python interpreters."""
+    entries = [
+        entry
+        for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+        if entry
+    ]
+    rendered = str(path)
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        [rendered, *(entry for entry in entries if entry != rendered)]
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     if _external_tier_selected(config):
         return
+    environment_keys = (
+        "HF_HUB_OFFLINE",
+        "TRANSFORMERS_OFFLINE",
+        "SPATIAL_TX_OFFLINE_GUARD",
+        "PYTHONPATH",
+    )
+    socket_functions = {
+        "connect": socket.socket.connect,
+        "connect_ex": socket.socket.connect_ex,
+        "create_connection": socket.create_connection,
+        "getaddrinfo": socket.getaddrinfo,
+        "gethostbyname": socket.gethostbyname,
+        "gethostbyname_ex": socket.gethostbyname_ex,
+        "gethostbyaddr": socket.gethostbyaddr,
+    }
+    _OFFLINE_STATES[id(config)] = _OfflineState(
+        environment={key: os.environ.get(key, _MISSING) for key in environment_keys},
+        socket_functions=socket_functions,
+    )
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["SPATIAL_TX_OFFLINE_GUARD"] = "1"
+    _prepend_pythonpath(OFFLINE_GUARD_PATH)
     socket.socket.connect = _deny_socket  # type: ignore[method-assign]
+    socket.socket.connect_ex = _deny_socket  # type: ignore[method-assign]
     socket.create_connection = _deny_socket
+    socket.getaddrinfo = _deny_socket
+    socket.gethostbyname = _deny_socket
+    socket.gethostbyname_ex = _deny_socket
+    socket.gethostbyaddr = _deny_socket
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
     if _external_tier_selected(config):
         return
-    socket.socket.connect = _ORIGINAL_SOCKET_CONNECT  # type: ignore[method-assign]
-    socket.create_connection = _ORIGINAL_CREATE_CONNECTION
+    state = _OFFLINE_STATES.pop(id(config), None)
+    if state is None:
+        return
+    socket.socket.connect = state.socket_functions[  # type: ignore[method-assign]
+        "connect"
+    ]
+    socket.socket.connect_ex = state.socket_functions[  # type: ignore[method-assign]
+        "connect_ex"
+    ]
+    socket.create_connection = state.socket_functions["create_connection"]
+    socket.getaddrinfo = state.socket_functions["getaddrinfo"]
+    socket.gethostbyname = state.socket_functions["gethostbyname"]
+    socket.gethostbyname_ex = state.socket_functions["gethostbyname_ex"]
+    socket.gethostbyaddr = state.socket_functions["gethostbyaddr"]
+    for key, value in state.environment.items():
+        if value is _MISSING:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = str(value)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
