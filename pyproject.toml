@@ -22,3 +22,25 @@ include = ["utils*"]
 
 [tool.setuptools.package-dir]
 "" = "."
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers -m offline"
+markers = [
+    "offline: CPU-small evidence that must not access external services",
+    "notebook_smoke: opt-in notebook execution smoke evidence",
+    "network: opt-in evidence that may access public network services",
+    "full_cohort: opt-in evidence that runs against complete scientific cohorts",
+]
+
+[tool.ruff]
+target-version = "py311"
+src = [
+    "utils",
+    "scripts",
+    "projects/spatial-pharma-dl/src",
+    "projects/spatial-pharma-dl/scripts",
+    "projects/spatial-pharma-dl/tests",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

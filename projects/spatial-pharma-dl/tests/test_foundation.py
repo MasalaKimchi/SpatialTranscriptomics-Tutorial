@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 
-PHARMA = Path(__file__).resolve().parents[1]
-ROOT = PHARMA.parents[1]
-sys.path[:0] = [str(PHARMA), str(ROOT)]
+pytestmark = pytest.mark.offline
 
 from src.foundation import (  # noqa: E402
     FOUNDATION_MODELS,

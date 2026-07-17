@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
-PHARMA = Path(__file__).resolve().parents[1]
-ROOT = PHARMA.parents[1]
-sys.path[:0] = [str(PHARMA), str(ROOT)]
+pytestmark = pytest.mark.offline
 
 
 def test_package_exports_are_lazy_and_scanpy_independent() -> None:
