@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import scanpy as sc
 import yaml
 
 from . import bootstrap  # noqa: F401 — ensures repo root is on sys.path
@@ -62,6 +61,8 @@ def preprocess_slide(
     seed: int | None = None,
 ) -> Any:
     """Run tutorial-equivalent QC + clustering pipeline on one slide."""
+    import scanpy as sc
+
     cfg = cfg or load_config()
     prep = cfg["preprocessing"]
     seed = seed if seed is not None else cfg.get("seed", st.SEED)

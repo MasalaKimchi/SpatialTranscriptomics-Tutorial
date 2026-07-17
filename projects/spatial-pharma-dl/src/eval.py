@@ -168,8 +168,21 @@ class GradCAM:
         self.target_layer = target_layer
         self.activations = None
         self.gradients = None
-        target_layer.register_forward_hook(self._save_activation)
-        target_layer.register_full_backward_hook(self._save_gradient)
+        self._handles = (
+            target_layer.register_forward_hook(self._save_activation),
+            target_layer.register_full_backward_hook(self._save_gradient),
+        )
+
+    def close(self) -> None:
+        """Remove hooks registered on the target layer."""
+        for handle in self._handles:
+            handle.remove()
+
+    def __enter__(self) -> GradCAM:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
     def _save_activation(self, module, inp, out):
         self.activations = out.detach()
@@ -203,8 +216,8 @@ def grad_cam_for_patch(
     model.eval()
     x = torch.from_numpy(patch_chw).unsqueeze(0).to(dev)
     x = imagenet_normalize(x)
-    cam = GradCAM(model, get_gradcam_layer(model))
-    return cam(x, target_class)
+    with GradCAM(model, get_gradcam_layer(model)) as cam:
+        return cam(x, target_class)
 
 
 def save_benchmark_report(

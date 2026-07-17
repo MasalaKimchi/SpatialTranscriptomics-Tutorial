@@ -26,6 +26,13 @@ def code(text: str) -> dict:
 
 
 def insert(nb: dict, idx: int, cell: dict) -> None:
+    """Insert a cell once, preserving rerun idempotence."""
+    if any(
+        existing.get("cell_type") == cell.get("cell_type")
+        and existing.get("source") == cell.get("source")
+        for existing in nb["cells"]
+    ):
+        return
     nb["cells"].insert(idx, cell)
 
 

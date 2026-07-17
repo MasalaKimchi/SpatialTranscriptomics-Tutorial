@@ -15,10 +15,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import scanpy as sc
-import seaborn as sns
 import squidpy as sq
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,9 +71,9 @@ def fig_he_overview(adata) -> None:
 
 
 def fig_markers_spatial(adata) -> None:
-    markers = st.genes_present(
-        adata, ["Mbp", "Snap25", "Gfap", "Plp1"], verbose=False
-    )[:4]
+    markers = st.genes_present(adata, ["Mbp", "Snap25", "Gfap", "Plp1"], verbose=False)[
+        :4
+    ]
     if markers:
         sq.pl.spatial_scatter(adata, color=markers, ncols=2, size=1.3)
         st.save_fig(plt.gcf(), "06_marker_spatial.png")
@@ -122,7 +120,9 @@ def fig_integration(adata) -> None:
     )
     neuronal = st.genes_present(adata, ["Snap25", "Mbp", "Gfap"], verbose=False)
     if neuronal:
-        sc.tl.score_genes(adata, neuronal, score_name="sig_neuronal", random_state=st.SEED)
+        sc.tl.score_genes(
+            adata, neuronal, score_name="sig_neuronal", random_state=st.SEED
+        )
         corr = Ximg.apply(lambda col: col.corr(adata.obs["sig_neuronal"]))
         fig, ax = plt.subplots(figsize=(6, 5))
         corr.sort_values().plot(kind="barh", ax=ax, color="steelblue")

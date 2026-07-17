@@ -96,9 +96,7 @@ def resize_patch(patch: np.ndarray, size: int = 224) -> np.ndarray:
     """Resize patch to (size, size, 3) uint8."""
     if patch.shape[0] < 2 or patch.shape[1] < 2:
         return np.zeros((size, size, 3), dtype=np.uint8)
-    out = resize(
-        patch, (size, size), order=1, preserve_range=True, anti_aliasing=True
-    )
+    out = resize(patch, (size, size), order=1, preserve_range=True, anti_aliasing=True)
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
@@ -121,7 +119,12 @@ def patch_features(patch: np.ndarray) -> dict[str, float]:
     feats["eosin_mean"] = float(hed[..., 1].mean())
     gray = img_as_ubyte(rgb2gray(p))
     glcm = graycomatrix(
-        gray, distances=[1], angles=[0, np.pi / 2], levels=256, symmetric=True, normed=True
+        gray,
+        distances=[1],
+        angles=[0, np.pi / 2],
+        levels=256,
+        symmetric=True,
+        normed=True,
     )
     for prop in ["contrast", "homogeneity", "energy", "correlation"]:
         feats[f"glcm_{prop}"] = float(graycoprops(glcm, prop).mean())
@@ -183,7 +186,9 @@ def extract_all_patches_for_slide(
     return _extract_spot_patches(adata, slide_id, ref_stain, cfg or load_config())
 
 
-def fit_reference_stain(sample_ids: list[str], cfg: dict[str, Any] | None = None) -> np.ndarray:
+def fit_reference_stain(
+    sample_ids: list[str], cfg: dict[str, Any] | None = None
+) -> np.ndarray:
     """Fit Macenko reference stain matrix from first available slide."""
     from .data import load_slide
 
@@ -199,20 +204,26 @@ def fit_reference_stain(sample_ids: list[str], cfg: dict[str, Any] | None = None
 
 
 def save_patch_arrays(
-    slide_id: str, patches: np.ndarray, meta: pd.DataFrame, cfg: dict[str, Any] | None = None
+    slide_id: str,
+    patches: np.ndarray,
+    meta: pd.DataFrame,
+    cfg: dict[str, Any] | None = None,
 ) -> Path:
     path = patch_cache_path(slide_id, cfg)
     np.savez_compressed(path, patches=patches, meta=meta.to_dict("list"))
     return path
 
 
-def load_patch_arrays(slide_id: str, cfg: dict[str, Any] | None = None) -> tuple[np.ndarray, pd.DataFrame]:
+def load_patch_arrays(
+    slide_id: str, cfg: dict[str, Any] | None = None
+) -> tuple[np.ndarray, pd.DataFrame]:
     path = patch_cache_path(slide_id, cfg)
     if not path.exists():
         raise FileNotFoundError(f"Missing {path}. Run build_patch_cohort() first.")
-    data = np.load(path, allow_pickle=True)
-    meta = pd.DataFrame(data["meta"].item())
-    return data["patches"], meta
+    with np.load(path, allow_pickle=True) as data:
+        patches = data["patches"]
+        meta = pd.DataFrame(data["meta"].item())
+    return patches, meta
 
 
 def build_patch_cohort(

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
-import scanpy as sc
 
 from . import bootstrap  # noqa: F401
 from utils import st_helpers as st
@@ -42,13 +41,17 @@ def tme_class_to_id(cfg: dict[str, Any] | None = None) -> dict[str, int]:
     return {name: i for i, name in enumerate(tme_class_names(cfg))}
 
 
-def marker_genes_for_slide(sample_id: str, cfg: dict[str, Any] | None = None) -> list[str]:
+def marker_genes_for_slide(
+    sample_id: str, cfg: dict[str, Any] | None = None
+) -> list[str]:
     cfg = cfg or load_config()
     ttype = tumor_type_for_slide(sample_id)
     return cfg["marker_genes"].get(ttype, cfg["marker_genes"]["breast"])
 
 
 def compute_module_scores(adata, cfg: dict[str, Any] | None = None) -> list[str]:
+    import scanpy as sc
+
     cfg = cfg or load_config()
     created = []
     for name, genes in cfg["gene_modules"].items():
@@ -83,7 +86,9 @@ def module_columns(labels: pd.DataFrame) -> list[str]:
     return [c for c in labels.columns if c.startswith("module_")]
 
 
-def regression_columns(labels: pd.DataFrame, cfg: dict[str, Any] | None = None) -> list[str]:
+def regression_columns(
+    labels: pd.DataFrame, cfg: dict[str, Any] | None = None
+) -> list[str]:
     """Return regression target columns per config (modules, genes, or both)."""
     cfg = cfg or load_config()
     mode = cfg["labels"].get("regression_targets", "modules")
@@ -108,6 +113,8 @@ def build_labels_for_slide(
     cfg: dict[str, Any] | None = None,
     seed: int | None = None,
 ) -> pd.DataFrame:
+    import scanpy as sc
+
     cfg = cfg or load_config()
     seed = seed if seed is not None else cfg.get("seed", st.SEED)
     adata = load_slide(sample_id)
@@ -122,7 +129,9 @@ def build_labels_for_slide(
     cluster_markers = sc.get.rank_genes_groups_df(adata, group=None)
     domain_map = annotate_domain(cluster_markers)
 
-    gene_expr = adata[:, markers].to_df() if markers else pd.DataFrame(index=adata.obs_names)
+    gene_expr = (
+        adata[:, markers].to_df() if markers else pd.DataFrame(index=adata.obs_names)
+    )
 
     rows = []
     cluster_to_id = {
@@ -190,7 +199,5 @@ def build_labels_cohort(
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def align_labels_with_patches(
-    labels: pd.DataFrame, meta: pd.DataFrame
-) -> pd.DataFrame:
+def align_labels_with_patches(labels: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
     return labels.merge(meta, on=["slide_id", "spot_id"], how="inner")
