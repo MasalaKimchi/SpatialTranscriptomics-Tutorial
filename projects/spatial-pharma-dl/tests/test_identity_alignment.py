@@ -274,6 +274,101 @@ def test_persisted_slide_identity_rejects_null_and_string_subclass_without_hooks
     assert calls == []
 
 
+def _evil_column_frame(calls: list[str]) -> pd.DataFrame:
+    class EvilColumnMeta(type):
+        def __getattribute__(cls, name):
+            if name in {"__module__", "__name__", "__qualname__"}:
+                calls.append(name)
+                raise AssertionError("column metaclass naming hook executed")
+            return super().__getattribute__(name)
+
+    class EvilColumn(metaclass=EvilColumnMeta):
+        def __eq__(self, _other):
+            calls.append("eq")
+            raise AssertionError("column equality hook executed")
+
+        def __hash__(self):
+            calls.append("hash")
+            raise AssertionError("column hash hook executed")
+
+        def __repr__(self):
+            calls.append("repr")
+            raise AssertionError("column repr hook executed")
+
+        def __str__(self):
+            calls.append("str")
+            raise AssertionError("column str hook executed")
+
+    frame = pd.DataFrame([["value"]])
+    frame.columns = pd.Index([EvilColumn()], dtype=object)
+    calls.clear()
+    return frame
+
+
+@pytest.mark.parametrize("evil_side", ["labels", "metadata"])
+def test_alignment_rejects_hostile_column_labels_before_hooks(evil_side):
+    calls: list[str] = []
+    tables = {
+        "labels": pd.DataFrame(
+            {"slide_id": ["slide_a"], "spot_id": ["spot_a"]}
+        ),
+        "metadata": pd.DataFrame(
+            {"slide_id": ["slide_a"], "spot_id": ["spot_a"]}
+        ),
+    }
+    tables[evil_side] = _evil_column_frame(calls)
+
+    with pytest.raises(IdentityValidationError) as caught:
+        align_labels_with_metadata(
+            tables["labels"],
+            tables["metadata"],
+            stage="hostile_schema",
+        )
+
+    issue = caught.value.issues[0]
+    assert issue.code == "invalid_type"
+    assert issue.side == evil_side
+    assert issue.sample_rows == ((0, "column_label", "non_builtin_object"),)
+    assert calls == []
+
+
+@pytest.mark.parametrize("require_slide_id", [False, True])
+def test_anndata_rejects_hostile_column_labels_before_hooks(require_slide_id):
+    calls: list[str] = []
+    adata = SimpleNamespace(
+        obs_names=pd.Index(["spot_a"], dtype=object),
+        obs=_evil_column_frame(calls),
+    )
+
+    with pytest.raises(IdentityValidationError) as caught:
+        validate_anndata_spot_identity(
+            adata,
+            "slide_a",
+            stage="hostile_anndata_schema",
+            require_slide_id=require_slide_id,
+        )
+
+    issue = caught.value.issues[0]
+    assert issue.code == "invalid_type"
+    assert issue.side == "anndata_schema"
+    assert issue.sample_rows == ((0, "column_label", "non_builtin_object"),)
+    assert calls == []
+
+
+def test_exact_string_schema_keeps_missing_and_reserved_issue_order():
+    labels = pd.DataFrame({"spot_id": ["spot_a"], "_label_source_row": [0]})
+    metadata = pd.DataFrame({"slide_id": ["slide_a"]})
+
+    with pytest.raises(IdentityValidationError) as caught:
+        align_labels_with_metadata(labels, metadata, stage="exact_schema")
+
+    assert [(issue.code, issue.side) for issue in caught.value.issues] == [
+        ("missing_column", "labels"),
+        ("reserved_column", "labels"),
+        ("missing_column", "metadata"),
+    ]
+
+
 @pytest.mark.parametrize("defect", ["duplicate", "unmatched", "cross_slide"])
 def test_key_diagnostics_escape_controls_and_bound_long_unicode(defect):
     hostile_id = "line\n\t\x00" + "한🚀" * 100_000

@@ -120,9 +120,35 @@ def _validate_parameter(
     return value  # type: ignore[return-value]
 
 
+def _admit_column_labels(
+    columns: Any,
+    side: str,
+) -> tuple[tuple[str, ...], list[IdentityIssue]]:
+    """Admit schema labels by ordinal before any name comparison or hashing."""
+    invalid: list[tuple[int, str, str]] = []
+    admitted: list[str] = []
+    for ordinal in range(len(columns)):
+        label = columns[ordinal]
+        if type(label) is not str:
+            invalid.append((ordinal, "column_label", _type_label(label)))
+        else:
+            admitted.append(label)
+    if invalid:
+        return (), [
+            IdentityIssue(
+                code="invalid_type",
+                side=side,
+                count=len(invalid),
+                sample_rows=tuple(invalid[:_SAMPLE_LIMIT]),
+            )
+        ]
+    return tuple(admitted), []
+
+
 def _schema_issues(frame: pd.DataFrame, side: str) -> list[IdentityIssue]:
-    issues: list[IdentityIssue] = []
-    columns = tuple(frame.columns)
+    columns, issues = _admit_column_labels(frame.columns, side)
+    if issues:
+        return issues
     for column in KEY_COLUMNS:
         if column not in columns:
             issues.append(
@@ -449,12 +475,17 @@ def validate_anndata_spot_identity(
             )
         )
     obs = getattr(adata, "obs", None)
-    has_slide_id = (
-        obs is not None
-        and hasattr(obs, "columns")
-        and "slide_id" in tuple(obs.columns)
-    )
-    if require_slide_id and not has_slide_id:
+    has_obs_columns = obs is not None and hasattr(obs, "columns")
+    admitted_obs_columns: tuple[str, ...] = ()
+    schema_issues: list[IdentityIssue] = []
+    if has_obs_columns:
+        admitted_obs_columns, schema_issues = _admit_column_labels(
+            obs.columns,
+            "anndata_schema",
+        )
+        issues.extend(schema_issues)
+    has_slide_id = not schema_issues and "slide_id" in admitted_obs_columns
+    if require_slide_id and not has_slide_id and not schema_issues:
         issues.append(
             IdentityIssue(code="missing_column", side="anndata", count=1)
         )
