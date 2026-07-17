@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +20,21 @@ from skimage.util import img_as_ubyte
 from . import bootstrap  # noqa: F401
 from utils import st_helpers as st
 
-from .data import load_config, pharma_processed_dir, safe_filename
+from .data import (
+    _processed_fingerprint,
+    load_config,
+    pharma_processed_path,
+    safe_filename,
+)
 from .identity import validate_anndata_spot_identity
-from .validation import StageValidationError, require_non_empty
+from .validation import StageValidationError, require_non_empty, resolve_config
+from utils.artifacts import (
+    ARTIFACT_CONTRACT_VERSIONS,
+    ArtifactValidationError,
+    admit_artifact,
+    build_fingerprint,
+    publish_artifact,
+)
 
 
 def patch_size_px(
@@ -140,7 +154,105 @@ def patch_cache_path(slide_id: str, cfg: dict[str, Any] | None = None) -> Path:
     if cfg is None:
         cfg = load_config()
     version = cfg["patches"].get("version", "v1")
-    return pharma_processed_dir() / f"{safe_filename(slide_id)}_patches_{version}.npz"
+    return pharma_processed_path() / f"{safe_filename(slide_id)}_patches_{version}.npz"
+
+
+def _patch_fingerprint(slide_id: str, cfg: dict[str, Any]):
+    resolved = resolve_config(cfg).to_dict()
+    reference_ids = resolved["cohorts"]["oncology"]
+    reference_id = reference_ids[0] if reference_ids else slide_id
+    return build_fingerprint(
+        "patch",
+        {
+            "configuration": resolved,
+            "source": {
+                "stain_reference_policy": "first-configured-oncology-slide",
+                "reference_slide_id": reference_id,
+                "reference_slide_fingerprint": _processed_fingerprint(
+                    reference_id, resolved
+                ).digest,
+            },
+            "upstream": {
+                "processed_slide_fingerprint": _processed_fingerprint(
+                    slide_id, resolved
+                ).digest
+            },
+            "identity": {"slide_id": slide_id},
+        },
+    )
+
+
+def _patch_schema(
+    patches: np.ndarray, meta: pd.DataFrame, *, slide_id: str
+) -> dict[str, object]:
+    required = ["slide_id", "spot_id", "x", "y", "native_patch_px"]
+    if (
+        type(patches) is not np.ndarray
+        or patches.dtype != np.float32
+        or patches.ndim != 4
+        or patches.shape[1] != 3
+        or patches.shape[0] == 0
+        or not np.isfinite(patches).all()
+        or np.any((patches < 0.0) | (patches > 1.0))
+        or meta.columns.tolist() != required
+        or len(meta) != len(patches)
+        or meta.empty
+    ):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="patch")
+    if any(type(value) is not str or value != slide_id for value in meta["slide_id"]):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="patch")
+    if any(type(value) is not str or not value.strip() for value in meta["spot_id"]):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="patch")
+    if meta.duplicated(["slide_id", "spot_id"]).any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="patch")
+    numeric = meta[["x", "y", "native_patch_px"]].to_numpy(dtype=np.float64)
+    if not np.isfinite(numeric).all() or (meta["native_patch_px"] <= 0).any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="patch")
+    keys = meta[["slide_id", "spot_id"]].to_dict("split")["data"]
+    return {
+        "keys": ["meta", "patches"],
+        "patch_shape": [int(value) for value in patches.shape],
+        "patch_dtype": "float32",
+        "metadata_columns": required,
+        "identity_sha256": hashlib.sha256(
+            json.dumps(keys, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "legacy_decode_policy": "trusted-local-writer-only",
+    }
+
+
+def _read_trusted_local_patch_npz(path: Path, slide_id: str):
+    """Decode the legacy object field only after generic sidecar admission.
+
+    A checksum is integrity, not authenticity. This adapter supports only archives
+    emitted in-process by :func:`save_patch_arrays`; Phase 5 owns safe migration.
+    """
+    with np.load(path, allow_pickle=True) as data:
+        if set(data.files) != {"patches", "meta"}:
+            raise ArtifactValidationError(
+                "reader_validation_failed", artifact_kind="patch", basename=path.name
+            )
+        patch_values = data["patches"]
+        if type(patch_values) is not np.ndarray or patch_values.dtype.hasobject:
+            raise ArtifactValidationError(
+                "reader_validation_failed", artifact_kind="patch", basename=path.name
+            )
+        metadata_value = data["meta"]
+        if metadata_value.shape != () or metadata_value.dtype != object:
+            raise ArtifactValidationError(
+                "reader_validation_failed", artifact_kind="patch", basename=path.name
+            )
+        metadata_tree = metadata_value.item()
+    if type(metadata_tree) is not dict or any(
+        type(key) is not str or type(value) is not list
+        for key, value in metadata_tree.items()
+    ):
+        raise ArtifactValidationError(
+            "reader_validation_failed", artifact_kind="patch", basename=path.name
+        )
+    meta = pd.DataFrame(metadata_tree)
+    schema = _patch_schema(patch_values, meta, slide_id=slide_id)
+    return (patch_values, meta), schema
 
 
 def _extract_spot_patches(
@@ -230,21 +342,46 @@ def save_patch_arrays(
     meta: pd.DataFrame,
     cfg: dict[str, Any] | None = None,
 ) -> Path:
-    path = patch_cache_path(slide_id, cfg)
-    np.savez_compressed(path, patches=patches, meta=meta.to_dict("list"))
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    path = patch_cache_path(slide_id, resolved)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    schema = _patch_schema(patches, meta, slide_id=slide_id)
+
+    def write_payload(temporary: Path) -> None:
+        with temporary.open("wb") as handle:
+            np.savez_compressed(handle, patches=patches, meta=meta.to_dict("list"))
+
+    publish_artifact(
+        path,
+        artifact_kind="patch",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        fingerprint=_patch_fingerprint(slide_id, resolved),
+        payload_format="npz-legacy-local-object",
+        payload_schema=schema,
+        write_payload=write_payload,
+        reader=lambda temporary: _read_trusted_local_patch_npz(temporary, slide_id),
+    )
     return path
 
 
 def load_patch_arrays(
     slide_id: str, cfg: dict[str, Any] | None = None
 ) -> tuple[np.ndarray, pd.DataFrame]:
-    path = patch_cache_path(slide_id, cfg)
-    if not path.exists():
-        raise FileNotFoundError(f"Missing {path}. Run build_patch_cohort() first.")
-    with np.load(path, allow_pickle=True) as data:
-        patches = data["patches"]
-        meta = pd.DataFrame(data["meta"].item())
-    return patches, meta
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    path = patch_cache_path(slide_id, resolved)
+    admission = admit_artifact(
+        path,
+        expected_kind="patch",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        expected_fingerprint=_patch_fingerprint(slide_id, resolved),
+        reader=lambda candidate: _read_trusted_local_patch_npz(candidate, slide_id),
+    )
+    value, schema = admission.value
+    if json.loads(admission.manifest.payload_schema_json) != schema:
+        raise ArtifactValidationError(
+            "payload_schema_mismatch", artifact_kind="patch", basename=path.name
+        )
+    return value
 
 
 def build_patch_cohort(
@@ -273,11 +410,101 @@ def build_patch_cohort(
     return ref_stain
 
 
-def save_patch_index(labels: pd.DataFrame, path: Path | None = None) -> Path:
+def _index_fingerprint_for_ids(sample_ids: list[str], cfg: dict[str, Any]):
+    from .labels import _table_fingerprint
+
+    return build_fingerprint(
+        "patch_index",
+        {
+            "configuration": cfg,
+            "source": {
+                "label_fingerprints": [
+                    _table_fingerprint("label_table", [sid], cfg).digest
+                    for sid in sample_ids
+                ]
+            },
+            "upstream": {
+                "patch_fingerprints": [
+                    _patch_fingerprint(sid, cfg).digest for sid in sample_ids
+                ]
+            },
+            "identity": {"slide_ids": sample_ids},
+        },
+    )
+
+
+def _read_patch_index(path: Path, sample_ids: list[str]):
+    from .labels import _table_schema
+
+    frame = pd.read_parquet(path)
+    schema = _table_schema(frame, kind="label_table", sample_ids=sample_ids)
+    return frame, schema
+
+
+def save_patch_index(
+    labels: pd.DataFrame,
+    path: Path | None = None,
+    *,
+    cfg: dict[str, Any] | None = None,
+    artifact_context: dict[str, object] | None = None,
+) -> Path:
     """Save combined patch+label index to data/processed/pharma/patch_index.parquet."""
-    path = path or pharma_processed_dir() / "patch_index.parquet"
-    labels.to_parquet(path, index=False)
+    del artifact_context  # reserved compatibility hook; projection is derived exactly
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    path = path or pharma_processed_path() / "patch_index.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sample_ids = list(dict.fromkeys(labels["slide_id"].tolist()))
+    _frame, schema = _read_patch_index_from_frame(labels)
+    publish_artifact(
+        path,
+        artifact_kind="patch_index",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["patch_index"],
+        fingerprint=_index_fingerprint_for_ids(sample_ids, resolved),
+        payload_format="parquet",
+        payload_schema=schema,
+        write_payload=lambda temporary: labels.to_parquet(temporary, index=False),
+        reader=lambda temporary: _read_patch_index(temporary, sample_ids),
+    )
     return path
+
+
+def _read_patch_index_from_frame(frame: pd.DataFrame):
+    from .labels import _table_schema
+
+    sample_ids = list(dict.fromkeys(frame["slide_id"].tolist()))
+    return frame, _table_schema(frame, kind="label_table", sample_ids=sample_ids)
+
+
+def load_patch_index(
+    path: Path | None = None,
+    *,
+    cfg: dict[str, Any] | None = None,
+    sample_ids: list[str] | None = None,
+) -> pd.DataFrame:
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    path = path or pharma_processed_path() / "patch_index.parquet"
+    expected_ids = (
+        sample_ids
+        if sample_ids is not None
+        else [
+            *resolved["cohorts"]["oncology"],
+            *resolved["cohorts"]["external"],
+            *resolved["cohorts"]["benchmark"],
+        ]
+    )
+    admission = admit_artifact(
+        path,
+        expected_kind="patch_index",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch_index"],
+        expected_fingerprint=_index_fingerprint_for_ids(expected_ids, resolved),
+        reader=lambda candidate: _read_patch_index(candidate, expected_ids),
+    )
+    frame, schema = admission.value
+    if json.loads(admission.manifest.payload_schema_json) != schema:
+        raise ArtifactValidationError(
+            "payload_schema_mismatch", artifact_kind="patch_index", basename=path.name
+        )
+    return frame
 
 
 try:

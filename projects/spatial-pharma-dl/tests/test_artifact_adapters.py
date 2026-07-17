@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src import data, labels
+from src import data, labels, patches
 from src.validation import finalize_preprocessing_resolution, resolve_post_qc_preprocessing
 from utils import st_helpers as st
 from utils.artifacts import ArtifactValidationError, manifest_path
@@ -116,3 +116,42 @@ def test_label_and_domain_tables_round_trip_with_processed_lineage(tmp_path, mon
     domain_path = labels.save_domain_table(domain, ["slide_a"], cfg=cfg)
     assert labels.load_domain_table(["slide_a"], cfg=cfg).equals(domain)
     assert manifest_path(label_path).is_file() and manifest_path(domain_path).is_file()
+
+
+def test_trusted_local_patch_and_index_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "project_root", lambda: tmp_path)
+    cfg = data.load_config()
+    values = np.zeros((2, 3, 4, 4), dtype=np.float32)
+    meta = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a"],
+            "spot_id": ["spot_0", "spot_1"],
+            "x": [1.0, 2.0],
+            "y": [3.0, 4.0],
+            "native_patch_px": [8, 8],
+        }
+    )
+    path = patches.save_patch_arrays("slide_a", values, meta, cfg=cfg)
+    restored, restored_meta = patches.load_patch_arrays("slide_a", cfg=cfg)
+    np.testing.assert_array_equal(restored, values)
+    pd.testing.assert_frame_equal(restored_meta, meta)
+    assert manifest_path(path).is_file()
+
+    index = meta[["slide_id", "spot_id"]].assign(
+        cluster=["0", "0"],
+        cluster_id=[0, 0],
+        domain_name=["domain_0", "domain_0"],
+        tme_class=["other", "other"],
+        tme_class_id=[0, 0],
+    )
+    index_path = patches.save_patch_index(index, cfg=cfg)
+    pd.testing.assert_frame_equal(
+        patches.load_patch_index(cfg=cfg, sample_ids=["slide_a"]), index
+    )
+    assert manifest_path(index_path).is_file()
+
+
+def test_patch_path_resolution_is_pure(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "project_root", lambda: tmp_path)
+    path = patches.patch_cache_path("slide_a", data.load_config())
+    assert not path.parent.exists()
