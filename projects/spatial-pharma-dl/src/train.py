@@ -1,4 +1,4 @@
-"""LOSO training loop for Spatial Pharma DL."""
+"""LOSO training loop for Spatial Pharma DL (v2 remediated labels + modules)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,12 @@ from torch.utils.data import DataLoader
 
 from .data import load_config, pharma_outputs_dir
 from .device import device_label, resolve_device
-from .labels import align_labels_with_patches, gene_columns
+from .labels import (
+    align_labels_with_patches,
+    classification_column,
+    regression_columns,
+    tme_class_names,
+)
 from .models import build_model
 from .patches import SpotPatchDataset, load_patch_arrays
 from .transforms import NormalizedDataset
@@ -30,25 +35,18 @@ def _maybe_subsample(
 
 
 def loso_folds(slide_ids: list[str]) -> list[tuple[list[str], str]]:
-    """Return list of (train_slides, val_slide) for leave-one-slide-out."""
     return [([s for s in slide_ids if s != v], v) for v in slide_ids]
 
 
 def load_slide_patches(
-    slide_id: str, labels: pd.DataFrame
+    slide_id: str, labels: pd.DataFrame, cfg: dict[str, Any] | None = None
 ) -> tuple[np.ndarray, pd.DataFrame]:
-    """Load cached patches aligned with labels for one slide."""
-    patches, meta = load_patch_arrays(slide_id)
+    patches, meta = load_patch_arrays(slide_id, cfg=cfg)
     slide_labels = labels[labels["slide_id"] == slide_id]
     aligned = align_labels_with_patches(slide_labels, meta)
     order = aligned["spot_id"].tolist()
     idx_map = {s: i for i, s in enumerate(meta["spot_id"])}
     return patches[[idx_map[s] for s in order]], aligned.reset_index(drop=True)
-
-
-# Backward-compatible alias for notebooks generated before rename.
-_load_slide_data = load_slide_patches
-
 
 def train_one_fold(
     train_slides: list[str],
@@ -58,21 +56,21 @@ def train_one_fold(
     fold: int = 0,
     device: str | None = None,
 ) -> dict[str, Any]:
-    """Train one LOSO fold; return metrics and model path."""
     cfg = cfg or load_config()
     train_cfg = cfg["training"]
     dev = resolve_device(device or train_cfg.get("device", "auto"))
     device = str(dev)
     model_name = train_cfg.get("model", "resnet18")
     pretrained = bool(train_cfg.get("pretrained", True))
-    print(f"  Device: {device_label(dev)} | backbone: {model_name}")
+    cls_col = classification_column(cfg)
+    print(f"  Device: {device_label(dev)} | backbone: {model_name} | cls={cls_col}")
 
     train_patches, train_labels = [], []
     for sid in train_slides:
-        patches, lab = load_slide_patches(sid, labels)
+        patches, lab = load_slide_patches(sid, labels, cfg=cfg)
         train_patches.append(patches)
         train_labels.append(lab)
-    X_val, lab_val = load_slide_patches(val_slide, labels)
+    X_val, lab_val = load_slide_patches(val_slide, labels, cfg=cfg)
 
     X_train = np.concatenate(train_patches, axis=0)
     lab_train = pd.concat(train_labels, ignore_index=True)
@@ -81,25 +79,21 @@ def train_one_fold(
     X_train, lab_train = _maybe_subsample(X_train, lab_train, quick_max)
     X_val, lab_val = _maybe_subsample(X_val, lab_val, quick_max)
 
-    gene_cols = gene_columns(lab_train)
-    n_classes = int(lab_train["cluster_id"].nunique())
-    n_genes = len(gene_cols)
+    reg_cols = regression_columns(lab_train, cfg)
+    if not reg_cols:
+        raise ValueError("No regression targets found; check module score columns.")
 
-    uniq = sorted(lab_train["cluster_id"].unique())
-    cls_map = {c: i for i, c in enumerate(uniq)}
-    lab_train = lab_train.copy()
-    lab_val = lab_val.copy()
-    lab_train["cluster_id"] = lab_train["cluster_id"].map(cls_map)
-    lab_val["cluster_id"] = lab_val["cluster_id"].map(lambda c: cls_map.get(c, -1))
-    val_mask = lab_val["cluster_id"] >= 0
-    lab_val = lab_val[val_mask].reset_index(drop=True)
-    X_val = X_val[val_mask.to_numpy()]
+    # Global TME classes — stable across slides (no per-slide cluster collision)
+    n_classes = len(tme_class_names(cfg))
+    n_genes = len(reg_cols)
 
     train_ds = NormalizedDataset(
-        SpotPatchDataset(X_train, lab_train, gene_cols=gene_cols)
+        SpotPatchDataset(X_train, lab_train, cls_col=cls_col, reg_cols=reg_cols),
+        augment=bool(train_cfg.get("augment", False)),
     )
     val_ds = NormalizedDataset(
-        SpotPatchDataset(X_val, lab_val, gene_cols=gene_cols)
+        SpotPatchDataset(X_val, lab_val, cls_col=cls_col, reg_cols=reg_cols),
+        augment=False,
     )
     train_loader = DataLoader(
         train_ds,
@@ -170,18 +164,20 @@ def train_one_fold(
                 break
 
     model.load_state_dict(best_state)
+    exp = cfg.get("experiment", "v2")
     out_dir = pharma_outputs_dir() / "models"
     out_dir.mkdir(parents=True, exist_ok=True)
-    model_path = out_dir / f"{model_name}_fold{fold}.pt"
+    model_path = out_dir / f"{model_name}_{exp}_fold{fold}.pt"
     torch.save(
         {
             "state_dict": model.state_dict(),
             "model_name": model_name,
+            "experiment": exp,
             "pretrained": pretrained,
             "n_classes": n_classes,
-            "n_genes": n_genes,
-            "gene_cols": gene_cols,
-            "cls_map": cls_map,
+            "n_reg_targets": n_genes,
+            "cls_col": cls_col,
+            "reg_cols": reg_cols,
             "val_slide": val_slide,
             "train_slides": train_slides,
         },
@@ -194,7 +190,8 @@ def train_one_fold(
         "train_slides": train_slides,
         "model_path": model_path,
         "history": history,
-        "gene_cols": gene_cols,
+        "cls_col": cls_col,
+        "reg_cols": reg_cols,
         "lab_val": lab_val,
         "X_val": X_val,
         "model": model,
@@ -208,7 +205,6 @@ def train_loso(
     labels: pd.DataFrame,
     cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Run full LOSO training across slides."""
     cfg = cfg or load_config()
     results = []
     for fold, (train_slides, val_slide) in enumerate(loso_folds(slide_ids)):

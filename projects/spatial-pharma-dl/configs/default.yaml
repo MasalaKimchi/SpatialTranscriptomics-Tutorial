@@ -1,4 +1,5 @@
 seed: 0
+experiment: v2_remediation
 
 cohorts:
   oncology:
@@ -22,6 +23,19 @@ preprocessing:
   n_neighbors: 15
   n_pcs_neighbors: 30
   leiden_resolution: 1.0
+
+# Harmonized TME labels (cross-slide comparable) + module-score regression targets.
+labels:
+  classification_col: tme_class_id
+  # modules = spot-robust programs; genes = optional secondary targets
+  regression_targets: modules
+  tme_classes:
+    - tumor_epithelial
+    - immune_enriched
+    - stromal
+    - proliferative
+    - hypoxic
+    - other
 
 marker_genes:
   breast:
@@ -93,24 +107,40 @@ gene_modules:
     - BNIP3
 
 patches:
+  version: v2
+  # 3x spot diameter => ~45px native vs 15px (less destructive upscale to 224)
+  context_scale: 3.0
   min_patch_px: 8
   output_size: 224
+  # Per-slide Macenko reduces FFPE vs fresh-frozen stain shift
+  per_slide_stain_norm: true
 
 training:
-  # Backbone: resnet18 (default/fast), resnet50, efficientnet_b0,
-  # convnext_tiny, vit_b_16 — all ImageNet-pretrained via torchvision.
   model: resnet18
   pretrained: true
-  # Device: auto (CUDA → MPS → CPU), or cuda | mps | cpu
   device: auto
   batch_size: 32
-  epochs: 15
+  epochs: 20
   lr: 0.0001
   weight_decay: 0.0001
-  cls_weight: 1.0
+  # De-emphasize classification; prioritize module regression
+  cls_weight: 0.25
   reg_weight: 1.0
-  patience: 3
+  patience: 5
   num_workers: 0
+  augment: true
+
+# Optional inference-only pathology foundation model. The encoder stays frozen;
+# only logistic/ridge probes are fitted within each LOSO training fold.
+foundation:
+  enabled: false
+  model: kaiko_vits16
+  # Alternative full-cohort comparison: phikon (86M parameters, 768-D).
+  device: auto
+  batch_size: 64
+  cache: true
+  # kaiko_vits16 is compact and ungated, but its weights are non-commercial.
+  # Set enabled=true only for research/tutorial use; see README for alternatives.
 
 evaluation:
   primary_metrics:

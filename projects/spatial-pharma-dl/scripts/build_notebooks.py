@@ -126,7 +126,11 @@ from utils import st_helpers as st
 slide = oncology[0]
 adata = load_slide(slide)
 img = st.get_image(adata, 'hires')
-_, half = patch_size_px(adata)
+_, half = patch_size_px(
+    adata,
+    min_patch=cfg['patches']['min_patch_px'],
+    context_scale=cfg['patches'].get('context_scale', 1.0),
+)
 coords = coords_hires(adata)
 fig, axes = plt.subplots(2, 6, figsize=(12, 4))
 for ax, i in zip(axes.flat, np.linspace(0, len(coords)-1, 12, dtype=int)):
@@ -165,7 +169,7 @@ pd.DataFrame(rows).to_csv(pharma_outputs_dir() / 'training_history.csv', index=F
         md("**Next:** `05_evaluation.ipynb`"),
     ],
     "05_evaluation.ipynb": [
-        md("# 05 — Evaluation and RF Benchmark\n\nCNN vs Random Forest with slide-level metrics."),
+        md("# 05 — Evaluation and Benchmark\n\nCNN vs radiomics Random Forest, with an optional frozen pathology-foundation-model linear probe. All arms use slide-level holdout."),
         code(SETUP),
         code("""import pandas as pd
 from src.data import load_config, cohort_slide_ids
@@ -173,18 +177,25 @@ from src.labels import build_labels_cohort
 from src.benchmark import run_and_save_benchmark
 
 cfg = load_config()
+# Optional research-only arm (Kaiko non-commercial weights):
+# cfg['foundation']['enabled'] = True
 oncology = cfg['cohorts']['oncology']
 labels = build_labels_cohort(cohort_slide_ids(cfg), cfg=cfg)
 breast_labels = labels[labels['slide_id'].isin(oncology)]
 report_path, results = run_and_save_benchmark(oncology, breast_labels, cfg=cfg)
 pd.read_csv(report_path)
 """),
+        md("""### Frozen foundation-model arm
+
+When `cfg['foundation']['enabled']` is true, the benchmark downloads the compact pathology encoder once, runs it strictly in inference mode, caches one embedding array per slide, and fits only logistic/ridge probes within each LOSO fold. The encoder receives no gradient updates.
+
+**License:** the tutorial-sized `kaiko_vits16` checkpoint is non-commercial. Do not use its output for commercial pharma decisions."""),
         code("""from src.eval import predict_cnn
 from src.patches import load_patch_arrays
 
 for sid in cfg['cohorts']['external']:
     try:
-        patches, _ = load_patch_arrays(sid)
+        patches, _ = load_patch_arrays(sid, cfg=cfg)
         predict_cnn(results[-1]['model'], patches[:50], device=results[-1]['device'])
         print(sid, 'external OK, spots sampled: 50')
     except FileNotFoundError as e:
@@ -233,7 +244,7 @@ sq.pl.spatial_scatter(adata, color='pred_cluster', size=1.3)
 plt.savefig(pharma_outputs_dir() / 'spatial_predictions.png', dpi=120, bbox_inches='tight')
 plt.show()
 """),
-        md("Fill [`PROJECT_REPORT.md`](../PROJECT_REPORT.md) with `outputs/pharma/benchmark_report.csv` results.\n\n**End of pipeline.**"),
+        md("Compare the run with the frozen-model findings in [`PROJECT_REPORT.md`](../PROJECT_REPORT.md).\n\n**End of pipeline.**"),
     ],
 }
 

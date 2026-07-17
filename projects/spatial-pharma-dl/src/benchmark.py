@@ -1,4 +1,4 @@
-"""LOSO benchmark orchestration: CNN vs Random Forest."""
+"""LOSO benchmark orchestration: CNN, radiomics RF, and frozen embeddings."""
 
 from __future__ import annotations
 
@@ -9,8 +9,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .data import load_config, pharma_outputs_dir
+from .data import load_config
 from .eval import evaluate_fold, save_benchmark_report, train_eval_rf_baseline
+from .foundation import run_foundation_loso
 from .train import _maybe_subsample, load_slide_patches, loso_folds, train_loso
 
 
@@ -33,15 +34,17 @@ def run_rf_loso_fold(
     val_slide: str,
     labels: pd.DataFrame,
     fold: int,
+    cfg: dict[str, Any] | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
     """Train and evaluate RF baseline for one LOSO fold."""
+    cfg = cfg or load_config()
     train_patches, train_labels = [], []
     for sid in train_slides:
-        patches, lab = load_slide_patches(sid, labels)
+        patches, lab = load_slide_patches(sid, labels, cfg=cfg)
         train_patches.append(patches)
         train_labels.append(lab)
-    val_patches, val_labels = load_slide_patches(val_slide, labels)
+    val_patches, val_labels = load_slide_patches(val_slide, labels, cfg=cfg)
     quick_max = 500 if os.environ.get("PHARMA_QUICK") else None
     X_train = np.concatenate(train_patches, axis=0)
     lab_train = pd.concat(train_labels, ignore_index=True)
@@ -52,6 +55,7 @@ def run_rf_loso_fold(
         lab_train,
         val_patches,
         val_labels,
+        cfg=cfg,
         seed=seed,
     )
     return _benchmark_row("rf", fold, val_slide, rf)
@@ -62,7 +66,7 @@ def run_loso_benchmark(
     labels: pd.DataFrame,
     cfg: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Run CNN LOSO training plus RF baseline; return (benchmark_rows, cnn_results)."""
+    """Run configured LOSO benchmark arms; return rows and CNN results."""
     cfg = cfg or load_config()
     seed = int(cfg.get("seed", 0))
 
@@ -74,7 +78,12 @@ def run_loso_benchmark(
         rows.append(_benchmark_row("cnn", ev["fold"], ev["val_slide"], ev))
 
     for fold, (train_slides, val_slide) in enumerate(loso_folds(slide_ids)):
-        rows.append(run_rf_loso_fold(train_slides, val_slide, labels, fold, seed=seed))
+        rows.append(
+            run_rf_loso_fold(train_slides, val_slide, labels, fold, cfg=cfg, seed=seed)
+        )
+
+    if cfg.get("foundation", {}).get("enabled", False):
+        rows.extend(run_foundation_loso(slide_ids, labels, cfg=cfg))
 
     return rows, cnn_results
 
@@ -85,7 +94,7 @@ def run_and_save_benchmark(
     cfg: dict[str, Any] | None = None,
     path: Path | None = None,
 ) -> tuple[Path, list[dict[str, Any]]]:
-    """Run full benchmark and write ``benchmark_report.csv``."""
+    """Run the configured benchmark and write its versioned report."""
     rows, cnn_results = run_loso_benchmark(slide_ids, labels, cfg=cfg)
-    report_path = save_benchmark_report(rows, path=path)
+    report_path = save_benchmark_report(rows, path=path, cfg=cfg)
     return report_path, cnn_results

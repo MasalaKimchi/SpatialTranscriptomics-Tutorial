@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Run the full Spatial Pharma DL pipeline (phases 1-5 smoke + benchmark)."""
+"""Run the Spatial Pharma DL pipeline (v2 remediated experiment)."""
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -14,13 +15,13 @@ PHARMA = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(PHARMA))
 
-import src.bootstrap  # noqa: F401  # sets KMP_DUPLICATE_LIB_OK + sys.path
+import src.bootstrap  # noqa: E402,F401
 
-import matplotlib
+import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
 
-from utils import st_helpers as st
+from utils import st_helpers as st  # noqa: E402
 
 st.set_seeds()
 
@@ -34,46 +35,68 @@ from src.data import (  # noqa: E402
 )
 from src.eval import evaluate_fold  # noqa: E402
 from src.labels import build_labels_cohort  # noqa: E402
-from src.patches import build_patch_cohort, fit_reference_stain, save_patch_index  # noqa: E402
+from src.patches import (  # noqa: E402
+    build_patch_cohort,
+    fit_reference_stain,
+    patch_cache_path,
+    save_patch_index,
+)
+
+
+def _need_patch_rebuild(cfg: dict, all_slides: list[str]) -> bool:
+    if os.environ.get("PHARMA_FORCE_PATCHES"):
+        return True
+    return any(not patch_cache_path(sid, cfg).exists() for sid in all_slides)
 
 
 def main() -> None:
     cfg = load_config()
+    if os.environ.get("PHARMA_FOUNDATION"):
+        cfg["foundation"]["enabled"] = True
+    exp = cfg.get("experiment", "v2")
     oncology = cfg["cohorts"]["oncology"]
     all_slides = cohort_slide_ids(cfg)
     train_only = os.environ.get("PHARMA_TRAIN_ONLY")
 
+    print("=" * 60)
+    print(f"Experiment: {exp}")
+    print("=" * 60)
+
     if not train_only:
-        print("=" * 60)
         print("Phase 1: Data curation")
-        print("=" * 60)
         preprocess_cohort(all_slides, cfg=cfg)
         summary = cohort_summary(all_slides)
         out = pharma_outputs_dir() / "cohort_summary.csv"
         summary.to_csv(out, index=False)
         print(summary.to_string())
         print("Wrote", out)
+    else:
+        print("PHARMA_TRAIN_ONLY=1: skipping phase 1")
 
-        print("=" * 60)
-        print("Phase 2: Label engineering")
-        print("=" * 60)
-        labels = build_labels_cohort(all_slides, cfg=cfg)
-        print(f"Labels: {len(labels)} spots")
+    print("Phase 2: Label engineering (harmonized TME + modules)")
+    labels = build_labels_cohort(all_slides, cfg=cfg)
+    print(f"Labels: {len(labels)} spots")
 
-        print("=" * 60)
-        print("Phase 3: Patch dataset")
-        print("=" * 60)
+    if not train_only or _need_patch_rebuild(cfg, all_slides):
+        print(
+            "Phase 3: Patch dataset (context_scale=%s, version=%s)"
+            % (
+                cfg["patches"].get("context_scale", 1.0),
+                cfg["patches"].get("version", "v1"),
+            )
+        )
         ref_stain = fit_reference_stain(oncology, cfg)
         build_patch_cohort(all_slides, ref_stain=ref_stain, cfg=cfg)
-        idx_path = save_patch_index(labels)
-        print("Wrote", idx_path)
     else:
-        print("PHARMA_TRAIN_ONLY=1: skipping phases 1-3")
-        labels = build_labels_cohort(all_slides, cfg=cfg)
+        print("Phase 3: using cached v2 patches")
 
-    print("=" * 60)
-    print("Phase 4-5: LOSO training + RF benchmark (breast cohort)")
-    print("=" * 60)
+    idx_path = save_patch_index(labels)
+    print("Wrote", idx_path)
+
+    benchmark_arms = "CNN + RF"
+    if cfg.get("foundation", {}).get("enabled", False):
+        benchmark_arms += " + frozen-FM probe"
+    print(f"Phase 4-5: LOSO benchmark ({benchmark_arms}; breast cohort)")
     breast_labels = labels[labels["slide_id"].isin(oncology)]
 
     if os.environ.get("PHARMA_QUICK"):
@@ -82,7 +105,8 @@ def main() -> None:
         print("PHARMA_QUICK=1: epochs=2")
 
     report_path, cnn_results = run_and_save_benchmark(oncology, breast_labels, cfg=cfg)
-    for ev in (evaluate_fold(r) for r in cnn_results):
+    for r in cnn_results:
+        ev = evaluate_fold(r)
         print(
             f"  CNN fold {ev['fold']} {ev['val_slide'][:30]}: "
             f"bal_acc={ev['balanced_accuracy']:.3f} mean_r={ev['mean_pearson_r']:.3f}"
@@ -90,13 +114,44 @@ def main() -> None:
 
     import pandas as pd
 
-    for row in pd.read_csv(report_path).query("model == 'rf'").itertuples():
+    report = pd.read_csv(report_path)
+    for row in report.query("model != 'cnn'").itertuples():
         print(
-            f"  RF  fold {row.fold} {row.val_slide[:30]}: "
+            f"  {row.model:<17} fold {row.fold} {row.val_slide[:30]}: "
             f"bal_acc={row.balanced_accuracy:.3f} mean_r={row.mean_pearson_r:.3f}"
         )
 
+    summary = {
+        "experiment": exp,
+        "classification_col": cfg["labels"]["classification_col"],
+        "regression_targets": cfg["labels"]["regression_targets"],
+        "context_scale": cfg["patches"].get("context_scale"),
+        "patch_version": cfg["patches"].get("version"),
+        "cnn_mean_balanced_accuracy": float(
+            report.query("model == 'cnn'")["balanced_accuracy"].mean()
+        ),
+        "cnn_mean_pearson_r": float(
+            report.query("model == 'cnn'")["mean_pearson_r"].mean()
+        ),
+        "rf_mean_balanced_accuracy": float(
+            report.query("model == 'rf'")["balanced_accuracy"].mean()
+        ),
+        "rf_mean_pearson_r": float(
+            report.query("model == 'rf'")["mean_pearson_r"].mean()
+        ),
+    }
+    foundation_rows = report.query("model == 'foundation_linear'")
+    if len(foundation_rows):
+        summary["foundation_mean_balanced_accuracy"] = float(
+            foundation_rows["balanced_accuracy"].mean()
+        )
+        summary["foundation_mean_pearson_r"] = float(
+            foundation_rows["mean_pearson_r"].mean()
+        )
+    summary_path = pharma_outputs_dir() / f"experiment_{exp}_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
     print("Wrote", report_path)
+    print("Wrote", summary_path)
     print("=" * 60)
     print("Pipeline complete.")
     print("=" * 60)

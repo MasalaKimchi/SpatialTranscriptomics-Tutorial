@@ -9,6 +9,9 @@ requires-python = ">=3.11"
 pharma = [
     "torch>=2.0",
     "torchvision>=0.15",
+    "timm>=1.0",
+    "huggingface-hub>=0.24",
+    "transformers>=4.40",
     "pyyaml>=6.0",
     "pyarrow>=14.0",
 ]

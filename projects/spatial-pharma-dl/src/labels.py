@@ -1,4 +1,4 @@
-"""Label engineering: domains, marker genes, and module scores."""
+"""Label engineering: harmonized TME classes, module scores, and task columns."""
 
 from __future__ import annotations
 
@@ -24,15 +24,31 @@ DOMAIN_KEYWORDS = {
 }
 
 
+def tme_class_names(cfg: dict[str, Any] | None = None) -> list[str]:
+    cfg = cfg or load_config()
+    return list(cfg["labels"]["tme_classes"])
+
+
+def harmonize_tme_class(domain_name: str, cfg: dict[str, Any] | None = None) -> str:
+    """Map slide-local domain_name to a global cross-slide TME class."""
+    cfg = cfg or load_config()
+    allowed = set(tme_class_names(cfg))
+    if domain_name in allowed:
+        return domain_name
+    return "other"
+
+
+def tme_class_to_id(cfg: dict[str, Any] | None = None) -> dict[str, int]:
+    return {name: i for i, name in enumerate(tme_class_names(cfg))}
+
+
 def marker_genes_for_slide(sample_id: str, cfg: dict[str, Any] | None = None) -> list[str]:
-    """Return marker gene list for a slide based on tumor type."""
     cfg = cfg or load_config()
     ttype = tumor_type_for_slide(sample_id)
     return cfg["marker_genes"].get(ttype, cfg["marker_genes"]["breast"])
 
 
 def compute_module_scores(adata, cfg: dict[str, Any] | None = None) -> list[str]:
-    """Score gene modules; return list of obs column names created."""
     cfg = cfg or load_config()
     created = []
     for name, genes in cfg["gene_modules"].items():
@@ -46,7 +62,6 @@ def compute_module_scores(adata, cfg: dict[str, Any] | None = None) -> list[str]
 
 
 def annotate_domain(cluster_markers: pd.DataFrame) -> dict[str, str]:
-    """Assign human-readable domain names from top marker genes per cluster."""
     annotations = {}
     for cluster, grp in cluster_markers.groupby("group", observed=True):
         top_genes = grp.nlargest(5, "scores")["names"].tolist()
@@ -60,15 +75,43 @@ def annotate_domain(cluster_markers: pd.DataFrame) -> dict[str, str]:
     return annotations
 
 
+def gene_columns(labels: pd.DataFrame) -> list[str]:
+    return [c for c in labels.columns if c.startswith("gene_")]
+
+
+def module_columns(labels: pd.DataFrame) -> list[str]:
+    return [c for c in labels.columns if c.startswith("module_")]
+
+
+def regression_columns(labels: pd.DataFrame, cfg: dict[str, Any] | None = None) -> list[str]:
+    """Return regression target columns per config (modules, genes, or both)."""
+    cfg = cfg or load_config()
+    mode = cfg["labels"].get("regression_targets", "modules")
+    mods = module_columns(labels)
+    genes = gene_columns(labels)
+    if mode == "modules":
+        return mods
+    if mode == "genes":
+        return genes
+    if mode == "both":
+        return mods + genes
+    raise ValueError(f"Unknown regression_targets: {mode!r}")
+
+
+def classification_column(cfg: dict[str, Any] | None = None) -> str:
+    cfg = cfg or load_config()
+    return cfg["labels"]["classification_col"]
+
+
 def build_labels_for_slide(
     sample_id: str,
     cfg: dict[str, Any] | None = None,
     seed: int | None = None,
 ) -> pd.DataFrame:
-    """Build per-spot label DataFrame for one slide."""
     cfg = cfg or load_config()
     seed = seed if seed is not None else cfg.get("seed", st.SEED)
     adata = load_slide(sample_id)
+    class_map = tme_class_to_id(cfg)
 
     markers = st.genes_present(
         adata, marker_genes_for_slide(sample_id, cfg), verbose=False
@@ -88,12 +131,16 @@ def build_labels_for_slide(
 
     for spot_id in adata.obs_names:
         cluster = str(adata.obs.loc[spot_id, "clusters"])
+        domain_name = domain_map.get(cluster, f"domain_{cluster}")
+        tme_class = harmonize_tme_class(domain_name, cfg)
         row = {
             "slide_id": sample_id,
             "spot_id": spot_id,
             "cluster": cluster,
             "cluster_id": cluster_to_id[cluster],
-            "domain_name": domain_map.get(cluster, f"domain_{cluster}"),
+            "domain_name": domain_name,
+            "tme_class": tme_class,
+            "tme_class_id": class_map[tme_class],
         }
         for gene in markers:
             row[f"gene_{gene}"] = float(gene_expr.loc[spot_id, gene])
@@ -107,7 +154,6 @@ def build_labels_for_slide(
 def build_labels_cohort(
     sample_ids: list[str], cfg: dict[str, Any] | None = None
 ) -> pd.DataFrame:
-    """Build and save labels for all slides; return combined DataFrame."""
     cfg = cfg or load_config()
     out_dir = pharma_outputs_dir()
     frames = []
@@ -130,6 +176,9 @@ def build_labels_cohort(
                     "domain_name": labels.loc[
                         labels["cluster"] == cluster, "domain_name"
                     ].iloc[0],
+                    "tme_class": labels.loc[
+                        labels["cluster"] == cluster, "tme_class"
+                    ].iloc[0],
                 }
             )
         print(f"Wrote {path} ({len(labels)} spots)")
@@ -141,16 +190,7 @@ def build_labels_cohort(
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def gene_columns(labels: pd.DataFrame) -> list[str]:
-    return [c for c in labels.columns if c.startswith("gene_")]
-
-
-def module_columns(labels: pd.DataFrame) -> list[str]:
-    return [c for c in labels.columns if c.startswith("module_")]
-
-
 def align_labels_with_patches(
     labels: pd.DataFrame, meta: pd.DataFrame
 ) -> pd.DataFrame:
-    """Inner-join labels with patch metadata on slide_id + spot_id."""
     return labels.merge(meta, on=["slide_id", "spot_id"], how="inner")

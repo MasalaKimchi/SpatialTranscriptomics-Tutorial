@@ -21,11 +21,13 @@ from utils import st_helpers as st
 from .data import load_config, pharma_processed_dir, safe_filename
 
 
-def patch_size_px(adata, min_patch: int = 8) -> tuple[int, int]:
+def patch_size_px(
+    adata, min_patch: int = 8, context_scale: float = 1.0
+) -> tuple[int, int]:
     """Return (patch_size, half) in hires pixels from Visium scale factors."""
     sf = st.get_scalefactors(adata)
     scalef = sf["tissue_hires_scalef"]
-    patch = int(round(sf["spot_diameter_fullres"] * scalef))
+    patch = int(round(sf["spot_diameter_fullres"] * scalef * context_scale))
     patch = max(patch, min_patch)
     return patch, patch // 2
 
@@ -129,6 +131,12 @@ def patch_features(patch: np.ndarray) -> dict[str, float]:
     return feats
 
 
+def patch_cache_path(slide_id: str, cfg: dict[str, Any] | None = None) -> Path:
+    cfg = cfg or load_config()
+    version = cfg["patches"].get("version", "v1")
+    return pharma_processed_dir() / f"{safe_filename(slide_id)}_patches_{version}.npz"
+
+
 def _extract_spot_patches(
     adata,
     slide_id: str,
@@ -136,20 +144,31 @@ def _extract_spot_patches(
     cfg: dict[str, Any],
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Extract normalized, resized patches for all spots on a slide."""
-    min_patch = cfg["patches"]["min_patch_px"]
-    out_size = cfg["patches"]["output_size"]
+    patch_cfg = cfg["patches"]
+    min_patch = patch_cfg["min_patch_px"]
+    out_size = patch_cfg["output_size"]
+    context_scale = float(patch_cfg.get("context_scale", 1.0))
+    per_slide = bool(patch_cfg.get("per_slide_stain_norm", False))
+
     img = st.get_image(adata, "hires")
-    _, half = patch_size_px(adata, min_patch)
+    stain = stain_matrix_macenko(img) if per_slide else ref_stain
+    _, half = patch_size_px(adata, min_patch, context_scale)
     coords = coords_hires(adata)
 
     patches, meta_rows = [], []
     for i, (x, y) in enumerate(coords):
         raw = extract_patch(img, x, y, half)
-        norm = macenko_normalize(raw, ref_stain)
+        norm = macenko_normalize(raw, stain)
         resized = resize_patch(norm, out_size)
         patches.append(patch_to_tensor(resized))
         meta_rows.append(
-            {"slide_id": slide_id, "spot_id": adata.obs_names[i], "x": float(x), "y": float(y)}
+            {
+                "slide_id": slide_id,
+                "spot_id": adata.obs_names[i],
+                "x": float(x),
+                "y": float(y),
+                "native_patch_px": half * 2,
+            }
         )
     return np.stack(patches, axis=0), pd.DataFrame(meta_rows)
 
@@ -180,17 +199,15 @@ def fit_reference_stain(sample_ids: list[str], cfg: dict[str, Any] | None = None
 
 
 def save_patch_arrays(
-    slide_id: str, patches: np.ndarray, meta: pd.DataFrame
+    slide_id: str, patches: np.ndarray, meta: pd.DataFrame, cfg: dict[str, Any] | None = None
 ) -> Path:
-    """Save patch tensors to data/processed/pharma/<slide>_patches.npz."""
-    path = pharma_processed_dir() / f"{safe_filename(slide_id)}_patches.npz"
+    path = patch_cache_path(slide_id, cfg)
     np.savez_compressed(path, patches=patches, meta=meta.to_dict("list"))
     return path
 
 
-def load_patch_arrays(slide_id: str) -> tuple[np.ndarray, pd.DataFrame]:
-    """Load cached patch arrays for a slide."""
-    path = pharma_processed_dir() / f"{safe_filename(slide_id)}_patches.npz"
+def load_patch_arrays(slide_id: str, cfg: dict[str, Any] | None = None) -> tuple[np.ndarray, pd.DataFrame]:
+    path = patch_cache_path(slide_id, cfg)
     if not path.exists():
         raise FileNotFoundError(f"Missing {path}. Run build_patch_cohort() first.")
     data = np.load(path, allow_pickle=True)
@@ -216,7 +233,7 @@ def build_patch_cohort(
             print(f"Skipping {sid} (not preprocessed)")
             continue
         patches, meta = extract_all_patches_for_slide(adata, sid, ref_stain, cfg)
-        save_patch_arrays(sid, patches, meta)
+        save_patch_arrays(sid, patches, meta, cfg=cfg)
         print(f"Saved {len(patches)} patches for {sid}")
     return ref_stain
 
@@ -239,14 +256,14 @@ try:
             self,
             patches: np.ndarray,
             labels: pd.DataFrame,
-            cluster_col: str = "cluster_id",
-            gene_cols: list[str] | None = None,
+            cls_col: str = "tme_class_id",
+            reg_cols: list[str] | None = None,
         ):
             self.patches = patches
             self.labels = labels.reset_index(drop=True)
-            self.cluster_col = cluster_col
-            self.gene_cols = gene_cols or [
-                c for c in labels.columns if c.startswith("gene_")
+            self.cls_col = cls_col
+            self.reg_cols = reg_cols or [
+                c for c in labels.columns if c.startswith("module_")
             ]
             assert len(self.patches) == len(self.labels)
 
@@ -256,9 +273,9 @@ try:
         def __getitem__(self, idx: int):
             x = torch.from_numpy(self.patches[idx])
             row = self.labels.iloc[idx]
-            y_cls = int(row[self.cluster_col])
+            y_cls = int(row[self.cls_col])
             y_reg = torch.tensor(
-                [float(row[c]) for c in self.gene_cols], dtype=torch.float32
+                [float(row[c]) for c in self.reg_cols], dtype=torch.float32
             )
             return x, y_cls, y_reg
 
