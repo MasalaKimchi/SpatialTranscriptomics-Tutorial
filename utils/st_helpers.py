@@ -394,6 +394,108 @@ def load_adata(
     return value
 
 
+_ROOT_RESULT_COLUMNS = {
+    "qc_summary": ("total_counts", "n_genes_by_counts", "pct_counts_mt"),
+    "cluster_markers": ("group", "names", "scores", "logfoldchanges", "pvals", "pvals_adj"),
+    "image_features": (
+        "mean_r", "std_r", "mean_g", "std_g", "mean_b", "std_b",
+        "hematoxylin_mean", "eosin_mean", "glcm_contrast", "glcm_homogeneity",
+        "glcm_energy", "glcm_correlation", "entropy_mean", "edge_density",
+        "tissue_fraction",
+    ),
+    "integration_metrics": ("task", "target", "metric", "value"),
+}
+
+
+def root_artifact_lineage(filename: str) -> dict[str, str]:
+    """Return bounded current lineage for a root tutorial H5AD."""
+    from utils.artifacts import read_artifact_manifest
+
+    manifest = read_artifact_manifest(_root_h5ad_path(filename))
+    if manifest.artifact_kind != "root_h5ad":
+        raise ValueError("Root tutorial lineage requires a root_h5ad artifact.")
+    return {
+        "fingerprint": manifest.fingerprint.digest,
+        "manifest_sha256": __import__("hashlib").sha256(
+            manifest.canonical_json.encode("utf-8")
+        ).hexdigest(),
+        "payload_sha256": manifest.payload_sha256,
+    }
+
+
+def _root_result_schema(frame, result_name: str, *, include_index: bool):
+    from utils.artifacts import ArtifactValidationError
+
+    expected = _ROOT_RESULT_COLUMNS.get(result_name)
+    if expected is None or tuple(frame.columns) != expected or frame.empty:
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    if frame.isnull().any().any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    numeric = frame.select_dtypes(include=[np.number])
+    if not numeric.empty and not np.isfinite(numeric.to_numpy(dtype=np.float64)).all():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    return {
+        "result_name": result_name,
+        "columns": list(expected),
+        "rows": int(len(frame)),
+        "include_index": include_index,
+        "index": [str(value) for value in frame.index] if include_index else [],
+    }
+
+
+def save_root_result_table(
+    frame,
+    path: Path,
+    *,
+    result_name: str,
+    upstream_lineage: dict[str, object],
+    include_index: bool = False,
+) -> Path:
+    """Publish one named root-notebook table through the artifact contract."""
+    from utils.artifacts import (
+        ARTIFACT_CONTRACT_VERSIONS,
+        build_fingerprint,
+        publish_artifact,
+    )
+
+    if type(upstream_lineage) is not dict or not upstream_lineage:
+        raise ValueError("Root result publication requires current upstream lineage.")
+    schema = _root_result_schema(frame, result_name, include_index=include_index)
+    fingerprint = build_fingerprint(
+        "summary",
+        {
+            "configuration": {},
+            "source": {"result_name": result_name, "columns": schema["columns"]},
+            "upstream": upstream_lineage,
+            "identity": {"rows": schema["rows"], "index": schema["index"]},
+        },
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def reader(candidate: Path):
+        import pandas as pd
+
+        restored = pd.read_csv(candidate, index_col=0 if include_index else None)
+        return restored, _root_result_schema(
+            restored, result_name, include_index=include_index
+        )
+
+    publish_artifact(
+        path,
+        artifact_kind="summary",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["summary"],
+        fingerprint=fingerprint,
+        payload_format="csv",
+        payload_schema=schema,
+        write_payload=lambda temporary: frame.to_csv(
+            temporary, index=include_index
+        ),
+        reader=reader,
+        observed_schema=lambda decoded: decoded[1],
+    )
+    return path
+
+
 def adata_reuse_status(filename: str):
     """Return contract-aware optional-cache status without creating directories."""
     from utils.artifacts import ARTIFACT_CONTRACT_VERSIONS, artifact_reuse_status
