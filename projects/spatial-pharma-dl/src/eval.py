@@ -300,6 +300,7 @@ def save_benchmark_report(
         cfg = load_config()
     else:
         cfg = resolve_config(cfg).to_dict()
+    lineage = _require_lineage(upstream_lineage, kind="report")
     if path is None:
         exp = cfg.get("experiment", "v2")
         path = pharma_outputs_dir() / f"benchmark_report_{exp}.csv"
@@ -307,9 +308,7 @@ def save_benchmark_report(
     df["experiment"] = cfg.get("experiment", "v2")
     df = df.loc[:, list(BENCHMARK_REPORT_COLUMNS)]
     schema = _benchmark_schema(df, cfg)
-    fingerprint = _report_fingerprint(
-        df, cfg, upstream_lineage=upstream_lineage or {}
-    )
+    fingerprint = _report_fingerprint(df, cfg, upstream_lineage=lineage)
     path.parent.mkdir(parents=True, exist_ok=True)
     publish_artifact(
         path,
@@ -343,6 +342,15 @@ def _benchmark_schema(frame: pd.DataFrame, cfg: dict[str, Any]) -> dict[str, obj
     if any(not pd.api.types.is_numeric_dtype(frame[column]) for column in numeric):
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
     if not np.isfinite(frame[numeric].to_numpy(dtype=np.float64)).all():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if any(
+        ((frame[column] < 0) | (frame[column] > 1)).any()
+        for column in ("balanced_accuracy", "macro_f1")
+    ):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if ((frame["mean_pearson_r"] < -1) | (frame["mean_pearson_r"] > 1)).any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
+    if (frame["mean_r2"] > 1).any():
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
     if frame.duplicated(["experiment", "model", "fold", "val_slide"]).any():
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="report")
@@ -491,9 +499,34 @@ def _result_table_schema(frame: pd.DataFrame, table_name: str) -> dict[str, obje
     if frame.duplicated(identity_columns).any():
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
     if table_name in {"nested_loso_results", "model_task_summary"}:
-        bounded = [column for column in columns if "coverage" in column]
+        bounded = [
+            column
+            for column in columns
+            if "coverage" in column
+            or "accuracy" in column
+            or "macro_f1" in column
+        ]
         if any(((frame[column] < 0) | (frame[column] > 1)).any() for column in bounded):
             raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    if table_name == "training_history" and (
+        (frame["train_loss"] < 0).any() or (frame["val_loss"] < 0).any()
+    ):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    if table_name == "cohort_summary" and (
+        (
+            frame[
+                ["n_spots", "n_genes", "n_clusters", "median_genes", "median_counts"]
+            ]
+            < 0
+        ).any().any()
+        or ((frame["median_mito_pct"] < 0) | (frame["median_mito_pct"] > 100)).any()
+    ):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    if table_name == "model_task_summary" and (
+        (frame["f1_lift_vs_majority"] < -1).any()
+        or (frame["f1_lift_vs_majority"] > 1).any()
+    ):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
     numeric_columns = [column for column in columns if pd.api.types.is_numeric_dtype(frame[column])]
     if numeric_columns and not np.isfinite(frame[numeric_columns].to_numpy(dtype=np.float64)).all():
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
@@ -515,13 +548,14 @@ def save_result_table(
 ) -> Path:
     """Atomically publish one named retained CSV result table."""
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    lineage = _require_lineage(upstream_lineage, kind="summary")
     schema = _result_table_schema(frame, table_name)
     fingerprint = build_fingerprint(
         "summary",
         {
             "configuration": resolved,
             "source": {"table_name": table_name, "columns": schema["columns"]},
-            "upstream": upstream_lineage or {},
+            "upstream": lineage,
             "identity": {"rows": schema["rows"]},
         },
     )
@@ -638,7 +672,14 @@ def _cohort_manifest(value: dict[str, object]) -> CohortManifest:
     ):
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
     partitions = (*manifest.included, *manifest.skipped, *manifest.failed)
-    if {item.slide_id for item in partitions} != set(configured_ids):
+    partition_ids = [item.slide_id for item in partitions]
+    configured_cohorts = {item.slide_id: item.cohort for item in manifest.configured}
+    if (
+        len(partition_ids) != len(configured_ids)
+        or len(set(partition_ids)) != len(partition_ids)
+        or set(partition_ids) != set(configured_ids)
+        or any(item.cohort != configured_cohorts.get(item.slide_id) for item in partitions)
+    ):
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
     for item in manifest.configured:
         if item.status != "configured" or item.reason_code is not None or item.reason is not None:
@@ -682,6 +723,15 @@ def _validate_named_json(value: dict[str, object], result_name: str) -> None:
         numeric = (required | optional) - {"experiment", "classification_col", "regression_targets", "patch_version"}
         if any(key in value and (type(value[key]) not in (int, float) or not np.isfinite(value[key])) for key in numeric):
             raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+        for key in numeric:
+            if key not in value:
+                continue
+            if "balanced_accuracy" in key and not 0 <= value[key] <= 1:
+                raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+            if "pearson_r" in key and not -1 <= value[key] <= 1:
+                raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+        if type(value["context_scale"]) not in (int, float) or value["context_scale"] <= 0:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
         return
     raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
 
@@ -697,6 +747,7 @@ def save_json_result(
 ) -> Path:
     """Atomically publish a named canonical JSON result or manifest wrapper."""
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    lineage = _require_lineage(upstream_lineage, kind=artifact_kind)
     raw, schema = _json_payload(value, result_name)
     kind = artifact_kind
     fingerprint = build_fingerprint(
@@ -704,7 +755,7 @@ def save_json_result(
         {
             "configuration": resolved,
             "source": {"result_name": result_name, "inner_payload": value},
-            "upstream": upstream_lineage or {},
+            "upstream": lineage,
             "identity": {"keys": schema["keys"]},
         },
     )

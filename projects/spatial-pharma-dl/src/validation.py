@@ -1302,15 +1302,6 @@ def admit_run(
                         reason,
                     )
                 )
-                skipped.append(
-                    SlideAdmission(
-                        slide_id,
-                        cohort,
-                        "skipped",
-                        "source_load_failed",
-                        "Source loading failed; correct the source or rerun with a usable slide.",
-                    )
-                )
             elif slide_id in unattempted:
                 skipped.append(
                     SlideAdmission(

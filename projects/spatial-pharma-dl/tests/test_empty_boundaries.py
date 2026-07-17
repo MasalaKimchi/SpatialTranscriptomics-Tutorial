@@ -606,6 +606,7 @@ def test_foundation_and_report_valid_configs_preserve_existing_behavior(
             }
         ],
         cfg=report_cfg,
+        upstream_lineage={"test_parent": "current"},
     )
     assert report.name == "benchmark_report_explicit_valid.csv"
     assert pd.read_csv(report)["experiment"].tolist() == ["explicit_valid"]

@@ -386,3 +386,81 @@ def test_patch_lineage_uses_actual_partial_cohort_reference_and_index_parents(
     declared = patches.read_artifact_manifest(path).fingerprint.to_dict()["inputs"]
     assert list(declared["source"]["label_manifests"]) == ["slide_a"]
     assert list(declared["upstream"]["patch_manifests"]) == ["slide_a"]
+
+
+def test_public_result_writers_reject_missing_lineage_before_filesystem_side_effects(
+    tmp_path,
+):
+    cfg = data.load_config()
+    table = pd.DataFrame(
+        {
+            "fold": [0], "val_slide": ["slide_a"], "epoch": [0],
+            "train_loss": [1.0], "val_loss": [1.0],
+        }
+    )
+    targets = [
+        lambda path: evaluation.save_benchmark_report(
+            [{
+                "model": "cnn", "fold": 0, "val_slide": "slide_a",
+                "balanced_accuracy": 0.5, "macro_f1": 0.5,
+                "mean_pearson_r": 0.0, "mean_r2": 0.0,
+            }],
+            path=path,
+            cfg=cfg,
+        ),
+        lambda path: evaluation.save_result_table(
+            table, path, table_name="training_history", cfg=cfg
+        ),
+        lambda path: evaluation.save_json_result(
+            {
+                "experiment": "v2", "classification_col": "tme_class_id",
+                "regression_targets": ["gene_A"], "context_scale": 1.0,
+                "patch_version": "v1", "cnn_mean_balanced_accuracy": 0.5,
+                "cnn_mean_pearson_r": 0.0, "rf_mean_balanced_accuracy": 0.5,
+                "rf_mean_pearson_r": 0.0,
+            },
+            path,
+            result_name="experiment_summary",
+            cfg=cfg,
+        ),
+    ]
+    for index, writer in enumerate(targets):
+        path = tmp_path / f"missing-{index}" / "result"
+        with pytest.raises(ArtifactValidationError, match="missing_expected_lineage"):
+            writer(path)
+        assert not path.parent.exists()
+
+
+def test_named_production_schemas_reject_overlapping_partitions_and_metric_ranges():
+    overlap = {
+        "schema_version": "cohort-manifest-v1",
+        "allow_partial": True,
+        "configured": [{
+            "slide_id": "a", "cohort": "oncology", "status": "configured",
+            "reason_code": None, "reason": None,
+        }],
+        "included": [{
+            "slide_id": "a", "cohort": "oncology", "status": "included",
+            "reason_code": None, "reason": None,
+        }],
+        "skipped": [{
+            "slide_id": "a", "cohort": "oncology", "status": "skipped",
+            "reason_code": "missing_processed_slide", "reason": "missing",
+        }],
+        "failed": [],
+    }
+    with pytest.raises(ArtifactValidationError, match="reader_validation_failed"):
+        evaluation._json_payload(overlap, "cohort_manifest")
+
+    invalid_metrics = pd.DataFrame(
+        [{
+            "model": "kaiko_vits16", "fold": 0, "held_out_slide": "slide_a",
+            "task": "all_4class", "n_train": 10, "n_test": 5,
+            "coverage": 1.0, "selected_candidate": "ridge",
+            "inner_macro_f1": 999.0, "accuracy": 999.0, "macro_f1": 999.0,
+            "balanced_accuracy": 999.0, "majority_macro_f1": 999.0,
+            "majority_balanced_accuracy": 999.0,
+        }]
+    )
+    with pytest.raises(ArtifactValidationError, match="reader_validation_failed"):
+        evaluation._result_table_schema(invalid_metrics, "nested_loso_results")

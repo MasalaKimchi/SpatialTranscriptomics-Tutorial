@@ -68,7 +68,6 @@ def test_strict_admission_aggregates_every_missing_and_failed_member() -> None:
     manifest = caught.value.manifest
     assert [item.slide_id for item in manifest.skipped] == [
         "oncology_a",
-        "external_a",
     ]
     assert [item.slide_id for item in manifest.failed] == ["external_a"]
     assert caught.value.unavailable_slide_ids == ("oncology_a", "external_a")
@@ -89,13 +88,10 @@ def test_partial_admission_is_explicit_complete_and_order_stable() -> None:
         "external_a",
         "benchmark_a",
     ]
-    assert [(item.status, item.reason_code) for item in manifest.skipped] == [
-        ("skipped", "source_load_failed")
-    ]
+    assert manifest.skipped == ()
     assert [(item.status, item.reason_code) for item in manifest.failed] == [
         ("failed", "source_load_failed")
     ]
-    assert manifest.skipped[0].reason != manifest.failed[0].reason
 
 
 @pytest.mark.parametrize(
@@ -333,13 +329,11 @@ def test_runner_strict_source_failure_has_no_false_success(
     ]
     assert manifest.included == ()
     assert [item.slide_id for item in manifest.skipped] == [
-        "oncology_b",
         "oncology_a",
         "external_a",
         "benchmark_a",
     ]
     assert [item.reason_code for item in manifest.skipped] == [
-        "source_load_failed",
         "source_not_attempted",
         "source_not_attempted",
         "source_not_attempted",
@@ -375,7 +369,6 @@ def test_runner_strict_failure_forbids_later_preprocessing_side_effects(
 
     assert attempted == ["oncology_b"]
     assert [item.reason_code for item in caught.value.manifest.skipped] == [
-        "source_load_failed",
         "source_not_attempted",
         "source_not_attempted",
         "source_not_attempted",
