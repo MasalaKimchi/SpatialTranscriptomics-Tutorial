@@ -33,9 +33,8 @@ from utils.artifacts import (
     ArtifactValidationError,
     admit_artifact,
     build_fingerprint,
-    manifest_path,
-    parse_manifest_bytes,
     publish_artifact,
+    read_artifact_manifest,
 )
 
 
@@ -380,12 +379,7 @@ def _manifest_expected_fingerprint(
     cfg: dict[str, Any],
     upstream_lineage: dict[str, object] | None = None,
 ):
-    try:
-        raw = manifest_path(path).read_bytes()
-    except FileNotFoundError:
-        reason = "legacy_artifact" if path.is_file() else "missing_payload"
-        raise ArtifactValidationError(reason, artifact_kind=kind, basename=path.name) from None
-    parsed = parse_manifest_bytes(raw, expected_basename=path.name)
+    parsed = read_artifact_manifest(path)
     inputs = parsed.fingerprint.to_dict()["inputs"]
     inputs["configuration"] = cfg
     if upstream_lineage is not None:
@@ -500,7 +494,7 @@ def load_result_table(
     expected = _manifest_expected_fingerprint(
         path, kind="summary", cfg=resolved, upstream_lineage=upstream_lineage
     )
-    parsed = parse_manifest_bytes(manifest_path(path).read_bytes(), expected_basename=path.name)
+    parsed = read_artifact_manifest(path)
     declared = json.loads(parsed.payload_schema_json)
     if declared.get("table_name") != table_name or type(declared.get("columns")) is not list:
         raise ArtifactValidationError("payload_schema_mismatch", artifact_kind="summary", basename=path.name)
@@ -596,7 +590,7 @@ def load_json_result(
     expected = _manifest_expected_fingerprint(
         path, kind=artifact_kind, cfg=resolved, upstream_lineage=upstream_lineage
     )
-    parsed = parse_manifest_bytes(manifest_path(path).read_bytes(), expected_basename=path.name)
+    parsed = read_artifact_manifest(path)
     declared = json.loads(parsed.payload_schema_json)
     if declared.get("result_name") != result_name or type(declared.get("keys")) is not list:
         raise ArtifactValidationError("payload_schema_mismatch", artifact_kind=artifact_kind, basename=path.name)

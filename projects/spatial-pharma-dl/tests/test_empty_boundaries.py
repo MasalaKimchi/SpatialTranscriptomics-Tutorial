@@ -594,7 +594,18 @@ def test_foundation_and_report_valid_configs_preserve_existing_behavior(
     monkeypatch.setattr(evaluation, "load_config", _forbidden)
     monkeypatch.setattr(evaluation, "pharma_outputs_dir", lambda: tmp_path)
     report = evaluation.save_benchmark_report(
-        [{"fold": 0}], cfg=report_cfg
+        [
+            {
+                "model": "cnn",
+                "fold": 0,
+                "val_slide": "slide_a",
+                "balanced_accuracy": 0.5,
+                "macro_f1": 0.4,
+                "mean_pearson_r": 0.3,
+                "mean_r2": 0.2,
+            }
+        ],
+        cfg=report_cfg,
     )
     assert report.name == "benchmark_report_explicit_valid.csv"
     assert pd.read_csv(report)["experiment"].tolist() == ["explicit_valid"]

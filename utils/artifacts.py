@@ -452,6 +452,20 @@ def _read_manifest_file(path: Path, *, basename: str) -> bytes:
         raise _error("invalid_manifest_file", basename=basename) from None
 
 
+def read_artifact_manifest(
+    payload_path: str | os.PathLike[str],
+) -> ArtifactManifest:
+    """Read one sidecar through the bounded regular-file admission path."""
+    path = Path(payload_path)
+    basename = _bounded_basename(path.name)
+    try:
+        raw = _read_manifest_file(manifest_path(path), basename=basename)
+    except FileNotFoundError:
+        reason = "legacy_artifact" if path.is_file() else "missing_payload"
+        raise _error(reason, basename=basename) from None
+    return parse_manifest_bytes(raw, expected_basename=basename)
+
+
 def _hash_payload_descriptor(
     path: Path, *, kind: str, basename: str
 ) -> tuple[int, str, os.stat_result]:
@@ -749,4 +763,5 @@ __all__ = [
     "manifest_path",
     "parse_manifest_bytes",
     "publish_artifact",
+    "read_artifact_manifest",
 ]

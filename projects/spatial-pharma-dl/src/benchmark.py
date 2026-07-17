@@ -14,7 +14,7 @@ from .eval import evaluate_fold, save_benchmark_report, train_eval_rf_baseline
 from .foundation import run_foundation_loso
 from .train import _maybe_subsample, load_slide_patches, loso_folds, train_loso
 from .validation import require_non_empty
-from utils.artifacts import manifest_path, parse_manifest_bytes
+from utils.artifacts import read_artifact_manifest
 
 
 def _benchmark_row(
@@ -169,10 +169,7 @@ def run_and_save_benchmark(
     checkpoints = []
     for result in cnn_results:
         checkpoint_path = Path(result["model_path"])
-        manifest = parse_manifest_bytes(
-            manifest_path(checkpoint_path).read_bytes(),
-            expected_basename=checkpoint_path.name,
-        )
+        manifest = read_artifact_manifest(checkpoint_path)
         checkpoints.append(manifest.fingerprint.digest)
     report_path = save_benchmark_report(
         rows,

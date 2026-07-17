@@ -17,9 +17,8 @@ from utils.artifacts import (
     ArtifactValidationError,
     admit_artifact,
     build_fingerprint,
-    manifest_path,
-    parse_manifest_bytes,
     publish_artifact,
+    read_artifact_manifest,
 )
 
 # Backbones exposed via configs/default.yaml training.model
@@ -356,14 +355,7 @@ def _expected_checkpoint_fingerprint(
     cfg: dict[str, Any],
     upstream_lineage: dict[str, object] | None,
 ) -> ArtifactFingerprint:
-    try:
-        raw = manifest_path(path).read_bytes()
-    except FileNotFoundError:
-        reason = "legacy_artifact" if path.is_file() else "missing_payload"
-        raise ArtifactValidationError(
-            reason, artifact_kind="checkpoint", basename=path.name
-        ) from None
-    sidecar = parse_manifest_bytes(raw, expected_basename=path.name)
+    sidecar = read_artifact_manifest(path)
     inputs = sidecar.fingerprint.to_dict()["inputs"]
     if upstream_lineage is not None:
         inputs["upstream"] = upstream_lineage
