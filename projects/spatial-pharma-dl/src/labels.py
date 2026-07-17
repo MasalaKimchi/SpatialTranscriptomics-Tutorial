@@ -205,6 +205,15 @@ def load_label_table(
     *,
     cfg: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
+    return _admit_label_table(sample_id, cfg=cfg).value[0]
+
+
+def _admit_label_table(
+    sample_id: str,
+    *,
+    cfg: dict[str, Any] | None = None,
+):
+    """Return one fully admitted label-table payload and manifest."""
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
     load_slide(sample_id, cfg=resolved)
     path = _label_path(sample_id)
@@ -222,7 +231,7 @@ def load_label_table(
         raise ArtifactValidationError(
             "payload_schema_mismatch", artifact_kind="label_table", basename=path.name
         )
-    return frame
+    return admission
 
 
 def save_domain_table(

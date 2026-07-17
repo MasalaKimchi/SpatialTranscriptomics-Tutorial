@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -429,6 +432,113 @@ def test_public_result_writers_reject_missing_lineage_before_filesystem_side_eff
         with pytest.raises(ArtifactValidationError, match="missing_expected_lineage"):
             writer(path)
         assert not path.parent.exists()
+
+
+def _rebind_manifest_to_payload(path):
+    sidecar = manifest_path(path)
+    tree = json.loads(sidecar.read_text(encoding="utf-8"))
+    raw = path.read_bytes()
+    tree["payload"]["byte_count"] = len(raw)
+    tree["payload"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    sidecar.write_text(
+        json.dumps(tree, sort_keys=True, separators=(",", ":")), encoding="utf-8"
+    )
+
+
+def test_patch_requires_fully_admitted_processed_parent(
+    tmp_path, monkeypatch, synthetic_anndata_factory
+):
+    monkeypatch.setattr(st, "project_root", lambda: tmp_path)
+    cfg = data.load_config()
+    processed = data.save_slide(
+        _processed_adata(synthetic_anndata_factory), "slide_a", cfg=cfg
+    )
+    values = np.zeros((1, 3, 4, 4), dtype=np.float32)
+    meta = pd.DataFrame(
+        {"slide_id": ["slide_a"], "spot_id": ["spot_0"], "x": [1.0],
+         "y": [2.0], "native_patch_px": [8]}
+    )
+
+    original_payload = processed.read_bytes()
+    processed.write_bytes(b"corrupt")
+    with pytest.raises(ArtifactValidationError, match="byte_count_mismatch|checksum_mismatch"):
+        patches.save_patch_arrays("slide_a", values, meta, cfg=cfg)
+
+    processed.write_bytes(original_payload)
+    processed.unlink()
+    with pytest.raises(FileNotFoundError):
+        patches.save_patch_arrays("slide_a", values, meta, cfg=cfg)
+
+    data.save_slide(_processed_adata(synthetic_anndata_factory), "slide_a", cfg=cfg)
+    processed.write_bytes(b"not-an-h5ad")
+    _rebind_manifest_to_payload(processed)
+    with pytest.raises(ArtifactValidationError, match="reader_validation_failed"):
+        patches.save_patch_arrays("slide_a", values, meta, cfg=cfg)
+
+
+def test_patch_index_requires_admitted_label_and_patch_parents_and_invalidates_mixed_generation(
+    tmp_path, monkeypatch, synthetic_anndata_factory
+):
+    monkeypatch.setattr(st, "project_root", lambda: tmp_path)
+    cfg = data.load_config()
+    data.save_slide(_processed_adata(synthetic_anndata_factory), "slide_a", cfg=cfg)
+    values = np.zeros((1, 3, 4, 4), dtype=np.float32)
+    meta = pd.DataFrame(
+        {"slide_id": ["slide_a"], "spot_id": ["spot_0"], "x": [1.0],
+         "y": [2.0], "native_patch_px": [8]}
+    )
+    patch_path = patches.save_patch_arrays("slide_a", values, meta, cfg=cfg)
+    index = meta[["slide_id", "spot_id"]].assign(
+        cluster=["0"], cluster_id=[0], domain_name=["domain_0"],
+        tme_class=["other"], tme_class_id=[0],
+    )
+    label_path = labels.save_label_table(index, "slide_a", cfg=cfg)
+    index_path = patches.save_patch_index(index, cfg=cfg)
+
+    label_payload = label_path.read_bytes()
+    label_path.unlink()
+    with pytest.raises(ArtifactValidationError, match="missing_payload"):
+        patches.save_patch_index(index, cfg=cfg)
+    label_path.write_bytes(label_payload)
+
+    patch_payload = patch_path.read_bytes()
+    patch_path.write_bytes(b"corrupt-patch")
+    with pytest.raises(ArtifactValidationError, match="byte_count_mismatch|checksum_mismatch"):
+        patches.save_patch_index(index, cfg=cfg)
+    patch_path.write_bytes(patch_payload)
+
+    label_path.write_bytes(b"not-parquet")
+    _rebind_manifest_to_payload(label_path)
+    with pytest.raises(ArtifactValidationError, match="reader_validation_failed"):
+        patches.save_patch_index(index, cfg=cfg)
+
+    labels.save_label_table(index, "slide_a", cfg=cfg)
+    labels.save_label_table(index.assign(gene_A=[1.0]), "slide_a", cfg=cfg)
+    with pytest.raises(ArtifactValidationError, match="stale_fingerprint"):
+        patches.load_patch_index(index_path, cfg=cfg, sample_ids=["slide_a"])
+
+
+def test_shared_patch_lineage_records_actual_supplied_reference(
+    tmp_path, monkeypatch, synthetic_anndata_factory
+):
+    monkeypatch.setattr(st, "project_root", lambda: tmp_path)
+    cfg = data.load_config()
+    cfg["cohorts"]["oncology"] = ["slide_a", "slide_b"]
+    cfg["patches"]["per_slide_stain_norm"] = False
+    for slide_id in ("slide_a", "slide_b"):
+        data.save_slide(
+            _processed_adata(synthetic_anndata_factory, slide_id), slide_id, cfg=cfg
+        )
+    values = np.zeros((1, 3, 4, 4), dtype=np.float32)
+    meta = pd.DataFrame(
+        {"slide_id": ["slide_a"], "spot_id": ["spot_0"], "x": [1.0],
+         "y": [2.0], "native_patch_px": [8]}
+    )
+    path = patches.save_patch_arrays(
+        "slide_a", values, meta, cfg=cfg, reference_slide_id="slide_b"
+    )
+    inputs = patches.read_artifact_manifest(path).fingerprint.to_dict()["inputs"]
+    assert inputs["source"]["stain_reference"]["slide_id"] == "slide_b"
 
 
 def test_named_production_schemas_reject_overlapping_partitions_and_metric_ranges():

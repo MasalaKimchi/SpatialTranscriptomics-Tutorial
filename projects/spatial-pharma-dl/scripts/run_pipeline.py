@@ -221,7 +221,12 @@ def main() -> None:
             )
         )
         ref_stain = stages.fit_reference_stain(oncology, cfg)
-        stages.build_patch_cohort(all_slides, ref_stain=ref_stain, cfg=cfg)
+        stages.build_patch_cohort(
+            all_slides,
+            ref_stain=ref_stain,
+            cfg=cfg,
+            reference_slide_id=oncology[0],
+        )
     else:
         print("Phase 3: using cached v2 patches")
 

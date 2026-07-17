@@ -54,7 +54,7 @@ def test_patch_lineage_ignores_training_but_rejects_patch_changes(tmp_path, monk
     monkeypatch.setattr(
         patches,
         "_patch_artifact_context",
-        lambda _slide_id, _cfg: {
+        lambda _slide_id, _cfg, **_kwargs: {
             "processed_slide": {"fingerprint": "a" * 64},
             "stain_reference": None,
         },

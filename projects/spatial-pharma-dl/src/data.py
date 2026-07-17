@@ -403,6 +403,20 @@ def load_slide(
     source_content_digest: str | None = None,
 ):
     """Load cached preprocessed slide."""
+    return _admit_slide(
+        sample_id,
+        cfg=cfg,
+        source_content_digest=source_content_digest,
+    ).value[0]
+
+
+def _admit_slide(
+    sample_id: str,
+    *,
+    cfg: dict[str, Any] | None = None,
+    source_content_digest: str | None = None,
+):
+    """Return a fully admitted processed-slide payload and manifest."""
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
     path = _processed_slide_path(sample_id)
     try:
@@ -428,7 +442,7 @@ def load_slide(
             artifact_kind="processed_slide",
             basename=path.name,
         )
-    return adata
+    return admission
 
 
 def preprocess_cohort(

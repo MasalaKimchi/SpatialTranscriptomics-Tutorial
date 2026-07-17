@@ -21,8 +21,6 @@ from . import bootstrap  # noqa: F401
 from utils import st_helpers as st
 
 from .data import (
-    _processed_fingerprint,
-    _processed_slide_path,
     load_config,
     pharma_processed_path,
     safe_filename,
@@ -31,6 +29,7 @@ from .identity import validate_anndata_spot_identity
 from .validation import StageValidationError, require_non_empty, resolve_config
 from utils.artifacts import (
     ARTIFACT_CONTRACT_VERSIONS,
+    ArtifactAdmission,
     ArtifactReuseStatus,
     ArtifactValidationError,
     admit_artifact,
@@ -161,20 +160,14 @@ def patch_cache_path(slide_id: str, cfg: dict[str, Any] | None = None) -> Path:
     return pharma_processed_path() / f"{safe_filename(slide_id)}_patches_{version}.npz"
 
 
-def _parent_manifest_context(
-    path: Path,
-    *,
-    expected_kind: str,
-    expected_fingerprint=None,
+def _admitted_parent_context(
+    admission: ArtifactAdmission, *, expected_kind: str
 ) -> dict[str, str]:
-    manifest = read_artifact_manifest(path)
-    if manifest.artifact_kind != expected_kind or (
-        expected_fingerprint is not None
-        and manifest.fingerprint.digest != expected_fingerprint.digest
-    ):
+    if type(admission) is not ArtifactAdmission or admission.manifest.artifact_kind != expected_kind:
         raise ArtifactValidationError(
-            "stale_parent_artifact", artifact_kind=expected_kind, basename=path.name
+            "stale_parent_artifact", artifact_kind=expected_kind
         )
+    manifest = admission.manifest
     return {
         "fingerprint": manifest.fingerprint.digest,
         "manifest_sha256": hashlib.sha256(
@@ -185,44 +178,57 @@ def _parent_manifest_context(
 
 
 def _reference_slide_id(slide_id: str, cfg: dict[str, Any]) -> str | None:
+    from .data import _admit_slide
+
     if cfg["patches"].get("per_slide_stain_norm", False):
         return None
     for candidate in cfg["cohorts"]["oncology"]:
         try:
-            _parent_manifest_context(
-                _processed_slide_path(candidate),
-                expected_kind="processed_slide",
-                expected_fingerprint=_processed_fingerprint(candidate, cfg),
-            )
+            _admit_slide(candidate, cfg=cfg)
         except (ArtifactValidationError, FileNotFoundError):
             continue
         return candidate
     return slide_id
 
 
-def _patch_artifact_context(slide_id: str, cfg: dict[str, Any]) -> dict[str, object]:
-    processed = _parent_manifest_context(
-        _processed_slide_path(slide_id),
-        expected_kind="processed_slide",
-        expected_fingerprint=_processed_fingerprint(slide_id, cfg),
+def _patch_artifact_context(
+    slide_id: str,
+    cfg: dict[str, Any],
+    *,
+    reference_slide_id: str | None = None,
+) -> dict[str, object]:
+    from .data import _admit_slide
+
+    processed = _admitted_parent_context(
+        _admit_slide(slide_id, cfg=cfg), expected_kind="processed_slide"
     )
-    reference_id = _reference_slide_id(slide_id, cfg)
+    reference_id = (
+        reference_slide_id
+        if reference_slide_id is not None
+        else _reference_slide_id(slide_id, cfg)
+    )
     reference = None
     if reference_id is not None:
         reference = {
             "slide_id": reference_id,
-            **_parent_manifest_context(
-                _processed_slide_path(reference_id),
+            **_admitted_parent_context(
+                _admit_slide(reference_id, cfg=cfg),
                 expected_kind="processed_slide",
-                expected_fingerprint=_processed_fingerprint(reference_id, cfg),
             ),
         }
     return {"processed_slide": processed, "stain_reference": reference}
 
 
-def _patch_fingerprint(slide_id: str, cfg: dict[str, Any]):
+def _patch_fingerprint(
+    slide_id: str,
+    cfg: dict[str, Any],
+    *,
+    reference_slide_id: str | None = None,
+):
     resolved = resolve_config(cfg).to_dict()
-    context = _patch_artifact_context(slide_id, resolved)
+    context = _patch_artifact_context(
+        slide_id, resolved, reference_slide_id=reference_slide_id
+    )
     reference = context["stain_reference"]
     return build_fingerprint(
         "patch",
@@ -399,6 +405,8 @@ def save_patch_arrays(
     patches: np.ndarray,
     meta: pd.DataFrame,
     cfg: dict[str, Any] | None = None,
+    *,
+    reference_slide_id: str | None = None,
 ) -> Path:
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
     path = patch_cache_path(slide_id, resolved)
@@ -413,7 +421,9 @@ def save_patch_arrays(
         path,
         artifact_kind="patch",
         contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
-        fingerprint=_patch_fingerprint(slide_id, resolved),
+        fingerprint=_patch_fingerprint(
+            slide_id, resolved, reference_slide_id=reference_slide_id
+        ),
         payload_format="npz-legacy-local-object",
         payload_schema=schema,
         write_payload=write_payload,
@@ -424,8 +434,23 @@ def save_patch_arrays(
 
 
 def load_patch_arrays(
-    slide_id: str, cfg: dict[str, Any] | None = None
+    slide_id: str,
+    cfg: dict[str, Any] | None = None,
+    *,
+    reference_slide_id: str | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame]:
+    return _admit_patch_arrays(
+        slide_id, cfg=cfg, reference_slide_id=reference_slide_id
+    ).value[0]
+
+
+def _admit_patch_arrays(
+    slide_id: str,
+    cfg: dict[str, Any] | None = None,
+    *,
+    reference_slide_id: str | None = None,
+):
+    """Return fully admitted patch values, metadata, and parent-bound manifest."""
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
     path = patch_cache_path(slide_id, resolved)
     read_artifact_manifest(path)
@@ -433,7 +458,9 @@ def load_patch_arrays(
         path,
         expected_kind="patch",
         expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
-        expected_fingerprint=_patch_fingerprint(slide_id, resolved),
+        expected_fingerprint=_patch_fingerprint(
+            slide_id, resolved, reference_slide_id=reference_slide_id
+        ),
         reader=lambda candidate: _read_trusted_local_patch_npz(candidate, slide_id),
     )
     value, schema = admission.value
@@ -441,7 +468,7 @@ def load_patch_arrays(
         raise ArtifactValidationError(
             "payload_schema_mismatch", artifact_kind="patch", basename=path.name
         )
-    return value
+    return admission
 
 
 def patch_reuse_status(slide_id: str, cfg: dict[str, Any] | None = None):
@@ -465,6 +492,8 @@ def build_patch_cohort(
     sample_ids: list[str],
     ref_stain: np.ndarray | None = None,
     cfg: dict[str, Any] | None = None,
+    *,
+    reference_slide_id: str | None = None,
 ) -> np.ndarray:
     """Build patches for all slides; return reference stain matrix."""
     from .data import load_slide
@@ -479,16 +508,38 @@ def build_patch_cohort(
     )
     if ref_stain is None:
         ref_stain = fit_reference_stain(sample_ids, cfg)
+        if not cfg["patches"].get("per_slide_stain_norm", False):
+            reference_slide_id = sample_ids[0]
+    elif (
+        not cfg["patches"].get("per_slide_stain_norm", False)
+        and reference_slide_id is None
+    ):
+        raise ArtifactValidationError(
+            "missing_stain_reference", artifact_kind="patch"
+        )
     for sid in sample_ids:
         adata = load_slide(sid, cfg=cfg)
         patches, meta = extract_all_patches_for_slide(adata, sid, ref_stain, cfg)
-        save_patch_arrays(sid, patches, meta, cfg=cfg)
+        save_patch_arrays(
+            sid,
+            patches,
+            meta,
+            cfg=cfg,
+            reference_slide_id=reference_slide_id,
+        )
         print(f"Saved {len(patches)} patches for {sid}")
     return ref_stain
 
 
 def _index_fingerprint_for_ids(sample_ids: list[str], cfg: dict[str, Any]):
-    from .labels import _label_path, _table_fingerprint
+    from .labels import _admit_label_table
+
+    label_admissions = {
+        sid: _admit_label_table(sid, cfg=cfg) for sid in sample_ids
+    }
+    patch_admissions = {
+        sid: _admit_patch_arrays(sid, cfg=cfg) for sid in sample_ids
+    }
 
     return build_fingerprint(
         "patch_index",
@@ -496,22 +547,16 @@ def _index_fingerprint_for_ids(sample_ids: list[str], cfg: dict[str, Any]):
             "configuration": cfg,
             "source": {
                 "label_manifests": {
-                    sid: _parent_manifest_context(
-                        _label_path(sid),
-                        expected_kind="label_table",
-                        expected_fingerprint=_table_fingerprint(
-                            "label_table", [sid], cfg
-                        ),
+                    sid: _admitted_parent_context(
+                        label_admissions[sid], expected_kind="label_table"
                     )
                     for sid in sample_ids
                 },
             },
             "upstream": {
                 "patch_manifests": {
-                    sid: _parent_manifest_context(
-                        patch_cache_path(sid, cfg),
-                        expected_kind="patch",
-                        expected_fingerprint=_patch_fingerprint(sid, cfg),
+                    sid: _admitted_parent_context(
+                        patch_admissions[sid], expected_kind="patch"
                     )
                     for sid in sample_ids
                 },

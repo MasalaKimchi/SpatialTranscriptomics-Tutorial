@@ -457,7 +457,7 @@ def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
         seen["stain_ids"] = ids
         return object()
 
-    def patch_stage(ids, ref_stain, cfg):
+    def patch_stage(ids, ref_stain, cfg, **_kwargs):
         seen["patch_ids"] = ids
 
     def benchmark_stage(ids, selected_labels, cfg):
