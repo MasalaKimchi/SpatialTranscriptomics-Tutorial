@@ -68,15 +68,16 @@ completed: 2026-07-17
 1. **Task 1: Build Wave 0 dimension matrices and the pure two-stage resolver** - `8b30394`
 2. **Task 2: Integrate observed counts and finalized dimensions into preprocess_slide** - `a0d0033`
 3. **Task 3: Publish additive admitted-order preprocessing run provenance** - `684d93b`
+4. **Post-gate hardening: Recompute and validate every primitive manifest record** - `b4c0d1e`
 
 ## Test Evidence
 
 - Pure resolver Wave 0: 12 focused offline tests passed; scoped Ruff passed.
 - Orchestration/guard/H5AD gate: 3 focused tests passed; 77 affected identity, synthetic AnnData, and empty-boundary regressions passed; scoped Ruff passed.
 - Provenance/cohort gate: 11 focused tests passed; scoped Ruff passed.
-- Complete adaptive preprocessing module: 18 tests passed.
+- Complete adaptive preprocessing module: 19 tests passed.
 - Affected validation, AnnData, cohort, identity, and empty-boundary suite: 128 tests passed.
-- Canonical repository gate: Ruff passed and all 201 offline tests passed without downloads or model weights.
+- Canonical repository gate: Ruff passed and all 202 offline tests passed without downloads or model weights.
 - Static inspection confirmed one HVG, PCA, and neighbors call, finalized parameters, and no graph-stage retry or solver switch.
 
 ## Decisions Made
@@ -90,6 +91,7 @@ completed: 2026-07-17
 
 - Updated `test_cohort_admission.py` so the existing successful runner fixture supplies the newly required per-slide preprocessing facts. This is regression-fixture maintenance, not production scope expansion.
 - Added a canonical JSON sibling in AnnData to recover exact built-in primitives after H5AD scalar decoding while retaining the required structured tree under `spatial_pharma_preprocessing`.
+- The final gate prompted one additional fail-closed hardening commit: every admitted primitive record is now recomputed through the pure resolver and must match exactly, so JSON-safe but scientifically inconsistent values are rejected.
 
 ## Issues Encountered
 
