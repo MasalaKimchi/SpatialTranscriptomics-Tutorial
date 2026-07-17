@@ -10,6 +10,7 @@ from . import bootstrap  # noqa: F401
 from utils import st_helpers as st
 
 from .data import load_config, load_slide, pharma_outputs_dir, tumor_type_for_slide
+from .validation import require_non_empty
 
 
 DOMAIN_KEYWORDS = {
@@ -100,12 +101,23 @@ def regression_columns(
     mods = module_columns(labels)
     genes = gene_columns(labels)
     if mode == "modules":
-        return mods
-    if mode == "genes":
-        return genes
-    if mode == "both":
-        return mods + genes
-    raise ValueError(f"Unknown regression_targets: {mode!r}")
+        selected = mods
+    elif mode == "genes":
+        selected = genes
+    elif mode == "both":
+        selected = mods + genes
+    else:
+        raise ValueError(f"Unknown regression_targets: {mode!r}")
+    require_non_empty(
+        selected,
+        stage="regression_target_selection",
+        subject=f"{mode} regression target columns",
+        guidance=(
+            "Generate the configured module or gene target columns before "
+            "selecting regression targets."
+        ),
+    )
+    return selected
 
 
 def classification_column(cfg: dict[str, Any] | None = None) -> str:
@@ -164,7 +176,14 @@ def build_labels_for_slide(
             row[col] = float(adata.obs.loc[spot_id, col])
         rows.append(row)
 
-    return pd.DataFrame(rows)
+    labels = pd.DataFrame(rows)
+    require_non_empty(
+        labels,
+        stage="slide_label_generation",
+        subject=f"labels for slide {sample_id}",
+        guidance="Retain at least one usable spot before generating slide labels.",
+    )
+    return labels
 
 
 def build_labels_cohort(
@@ -172,12 +191,24 @@ def build_labels_cohort(
 ) -> pd.DataFrame:
     if cfg is None:
         cfg = load_config()
+    require_non_empty(
+        sample_ids,
+        stage="cohort_label_generation",
+        subject="admitted slide sequence",
+        guidance="Admit at least one slide before generating cohort labels.",
+    )
     out_dir = pharma_outputs_dir()
     frames = []
     domain_rows = []
 
     for sid in sample_ids:
         labels = build_labels_for_slide(sid, cfg)
+        require_non_empty(
+            labels,
+            stage="cohort_label_generation",
+            subject=f"label rows for slide {sid}",
+            guidance="Retain at least one usable labeled spot for every admitted slide.",
+        )
         path = out_dir / f"labels_{sid.replace(' ', '_')}.parquet"
         labels.to_parquet(path, index=False)
         frames.append(labels)
@@ -196,11 +227,24 @@ def build_labels_cohort(
             )
         print(f"Wrote {path} ({len(labels)} spots)")
 
+    require_non_empty(
+        frames,
+        stage="cohort_label_generation",
+        subject="per-slide label frames",
+        guidance="Generate at least one non-empty per-slide label frame.",
+    )
+    total_rows = sum(len(frame) for frame in frames)
+    require_non_empty(
+        range(total_rows),
+        stage="cohort_label_generation",
+        subject="combined cohort label rows",
+        guidance="Retain at least one usable labeled spot in the admitted cohort.",
+    )
     if domain_rows:
         pd.DataFrame(domain_rows).to_csv(
             out_dir / "domain_annotations.csv", index=False
         )
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
 
 
 def align_labels_with_patches(labels: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:

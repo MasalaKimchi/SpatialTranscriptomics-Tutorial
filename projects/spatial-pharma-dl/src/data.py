@@ -10,7 +10,12 @@ import pandas as pd
 import yaml
 
 from . import bootstrap  # noqa: F401 — ensures repo root is on sys.path
-from .validation import ConfigValidationError, ValidationIssue, resolve_config
+from .validation import (
+    ConfigValidationError,
+    ValidationIssue,
+    require_non_empty,
+    resolve_config,
+)
 from utils import st_helpers as st
 
 
@@ -43,7 +48,14 @@ def cohort_slide_ids(cfg: dict[str, Any] | None = None) -> list[str]:
     else:
         cfg = resolve_config(cfg).to_dict()
     cohorts = cfg["cohorts"]
-    return cohorts["oncology"] + cohorts["external"] + cohorts["benchmark"]
+    sample_ids = cohorts["oncology"] + cohorts["external"] + cohorts["benchmark"]
+    require_non_empty(
+        sample_ids,
+        stage="cohort_configuration",
+        subject="configured slide sequence",
+        guidance="Configure at least one slide in cohorts before starting the pipeline.",
+    )
+    return sample_ids
 
 
 def pharma_processed_dir() -> Path:
@@ -167,6 +179,12 @@ def preprocess_cohort(
         cfg = load_config()
     if sample_ids is None:
         sample_ids = cohort_slide_ids(cfg)
+    require_non_empty(
+        sample_ids,
+        stage="cohort_preprocessing",
+        subject="admitted slide sequence",
+        guidance="Admit at least one available slide before preprocessing.",
+    )
     paths = {}
     for sid in sample_ids:
         out = pharma_processed_dir() / f"{safe_filename(sid)}_clustered.h5ad"
@@ -188,6 +206,12 @@ def cohort_summary(sample_ids: list[str] | None = None) -> pd.DataFrame:
     """Build summary table for processed slides."""
     if sample_ids is None:
         sample_ids = cohort_slide_ids()
+    require_non_empty(
+        sample_ids,
+        stage="cohort_summary",
+        subject="admitted slide sequence",
+        guidance="Admit at least one processed slide before building the summary.",
+    )
     rows = []
     for sid in sample_ids:
         adata = load_slide(sid)

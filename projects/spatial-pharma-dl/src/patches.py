@@ -19,6 +19,7 @@ from . import bootstrap  # noqa: F401
 from utils import st_helpers as st
 
 from .data import load_config, pharma_processed_dir, safe_filename
+from .validation import StageValidationError, require_non_empty
 
 
 def patch_size_px(
@@ -154,10 +155,16 @@ def _extract_spot_patches(
     context_scale = float(patch_cfg.get("context_scale", 1.0))
     per_slide = bool(patch_cfg.get("per_slide_stain_norm", False))
 
+    coords = coords_hires(adata)
+    require_non_empty(
+        coords,
+        stage="patch_extraction",
+        subject=f"spot coordinates for slide {slide_id}",
+        guidance="Retain at least one spatial spot before extracting patches.",
+    )
     img = st.get_image(adata, "hires")
     stain = stain_matrix_macenko(img) if per_slide else ref_stain
     _, half = patch_size_px(adata, min_patch, context_scale)
-    coords = coords_hires(adata)
 
     patches, meta_rows = [], []
     for i, (x, y) in enumerate(coords):
@@ -197,6 +204,12 @@ def fit_reference_stain(
 
     if cfg is None:
         cfg = load_config()
+    require_non_empty(
+        sample_ids,
+        stage="stain_reference",
+        subject="admitted slide sequence",
+        guidance="Admit at least one processed slide before fitting a stain reference.",
+    )
     for sid in sample_ids:
         adata = load_slide(sid)
         img = st.get_image(adata, "hires")
@@ -237,6 +250,12 @@ def build_patch_cohort(
 
     if cfg is None:
         cfg = load_config()
+    require_non_empty(
+        sample_ids,
+        stage="patch_cohort",
+        subject="admitted slide sequence",
+        guidance="Admit at least one slide before building patch caches.",
+    )
     if ref_stain is None:
         ref_stain = fit_reference_stain(sample_ids, cfg)
     for sid in sample_ids:
@@ -268,13 +287,39 @@ try:
             cls_col: str = "tme_class_id",
             reg_cols: list[str] | None = None,
         ):
+            require_non_empty(
+                patches,
+                stage="patch_dataset",
+                subject="patch rows",
+                guidance="Provide at least one patch and aligned label row.",
+            )
+            require_non_empty(
+                labels,
+                stage="patch_dataset",
+                subject="label rows",
+                guidance="Provide at least one patch and aligned label row.",
+            )
+            if len(patches) != len(labels):
+                raise StageValidationError(
+                    stage="patch_dataset",
+                    subject="aligned patch and label rows",
+                    observed=min(len(patches), len(labels)),
+                    minimum=max(len(patches), len(labels)),
+                    shape=(len(patches), len(labels)),
+                    guidance="Align one label row to every patch before dataset creation.",
+                    message=(
+                        "patch_dataset: patch and label row counts differ "
+                        f"(observed shape={(len(patches), len(labels))}, expected "
+                        "equal first dimensions). Align one label row to every patch "
+                        "before dataset creation."
+                    ),
+                )
             self.patches = patches
             self.labels = labels.reset_index(drop=True)
             self.cls_col = cls_col
             self.reg_cols = reg_cols or [
                 c for c in labels.columns if c.startswith("module_")
             ]
-            assert len(self.patches) == len(self.labels)
 
         def __len__(self) -> int:
             return len(self.patches)

@@ -117,6 +117,65 @@ class CohortAdmissionError(PharmaValidationError):
 class StageValidationError(PharmaValidationError):
     """Raised when an empty or undersized stage input is rejected."""
 
+    def __init__(
+        self,
+        *,
+        stage: str,
+        subject: str,
+        observed: int,
+        minimum: int,
+        guidance: str,
+        shape: tuple[int, ...] | None = None,
+        message: str | None = None,
+    ) -> None:
+        self.stage = stage
+        self.subject = subject
+        self.observed = int(observed)
+        self.minimum = int(minimum)
+        self.shape = None if shape is None else tuple(int(size) for size in shape)
+        details = f"observed count={self.observed}"
+        if self.shape is not None:
+            details += f", observed shape={self.shape}"
+        if message is None:
+            message = (
+                f"{self.stage}: {self.subject} is empty ({details}, expected "
+                f">={self.minimum}). {guidance}"
+            )
+        super().__init__(message)
+
+
+def require_non_empty(
+    value: object,
+    *,
+    stage: str,
+    subject: str,
+    minimum: int = 1,
+    shape: tuple[int, ...] | None = None,
+    guidance: str,
+) -> None:
+    """Reject empty or undersized values with stable structured diagnostics."""
+    resolved_shape = shape
+    if resolved_shape is None:
+        candidate = getattr(value, "shape", None)
+        if candidate is not None:
+            resolved_shape = tuple(int(size) for size in candidate)
+    if resolved_shape is not None and resolved_shape:
+        observed = resolved_shape[0]
+    else:
+        try:
+            observed = len(value)  # type: ignore[arg-type]
+        except TypeError as exc:
+            raise TypeError("require_non_empty value must be sized") from exc
+    if observed < minimum:
+        raise StageValidationError(
+            stage=stage,
+            subject=subject,
+            observed=observed,
+            minimum=minimum,
+            shape=resolved_shape,
+            guidance=guidance,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedConfig:
