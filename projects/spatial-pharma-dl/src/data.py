@@ -10,6 +10,7 @@ import pandas as pd
 import yaml
 
 from . import bootstrap  # noqa: F401 — ensures repo root is on sys.path
+from .validation import ConfigValidationError, ValidationIssue, resolve_config
 from utils import st_helpers as st
 
 
@@ -17,14 +18,30 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
 
 
 def load_config(path: Path | None = None) -> dict[str, Any]:
-    """Load YAML config from configs/default.yaml."""
-    with open(path or CONFIG_PATH) as f:
-        return yaml.safe_load(f)
+    """Load and strictly resolve YAML config from configs/default.yaml."""
+    with open(path or CONFIG_PATH, encoding="utf-8") as f:
+        try:
+            raw = yaml.safe_load(f)
+        except yaml.YAMLError as exc:
+            raise ConfigValidationError(
+                (
+                    ValidationIssue(
+                        "config",
+                        str(exc),
+                        "valid YAML whose root is a mapping",
+                        "Correct the YAML syntax before starting the pipeline.",
+                    ),
+                )
+            ) from exc
+    return resolve_config(raw).to_dict()
 
 
 def cohort_slide_ids(cfg: dict[str, Any] | None = None) -> list[str]:
     """Return all slide ids across oncology, external, and benchmark cohorts."""
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
+    else:
+        cfg = resolve_config(cfg).to_dict()
     cohorts = cfg["cohorts"]
     return cohorts["oncology"] + cohorts["external"] + cohorts["benchmark"]
 

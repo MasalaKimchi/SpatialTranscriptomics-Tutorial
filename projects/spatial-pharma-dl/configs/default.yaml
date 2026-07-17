@@ -14,6 +14,9 @@ cohorts:
   benchmark:
     - visium_hne
 
+cohort_policy:
+  allow_partial: false
+
 preprocessing:
   min_counts: 500
   min_cells: 3

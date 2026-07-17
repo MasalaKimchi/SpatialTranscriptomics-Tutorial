@@ -11,11 +11,26 @@ from pathlib import Path
 import pytest
 import yaml
 
+from src import data
+from src.data import cohort_slide_ids, load_config
 from src.validation import ConfigValidationError, ResolvedConfig, resolve_config
 
 pytestmark = pytest.mark.offline
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+ORIGINAL_TOP_LEVEL_KEYS = {
+    "seed",
+    "experiment",
+    "cohorts",
+    "preprocessing",
+    "labels",
+    "marker_genes",
+    "gene_modules",
+    "patches",
+    "training",
+    "foundation",
+    "evaluation",
+}
 
 
 def _valid_config() -> dict[str, object]:
@@ -126,3 +141,80 @@ def test_validation_import_stays_lightweight(monkeypatch: pytest.MonkeyPatch) ->
     importlib.import_module("src.validation")
     loaded = {name.split(".", 1)[0] for name in set(sys.modules) - before}
     assert heavy.isdisjoint(loaded)
+
+
+def test_default_yaml_adds_only_fail_closed_cohort_policy() -> None:
+    raw = _valid_config()
+    assert set(raw) == ORIGINAL_TOP_LEVEL_KEYS | {"cohort_policy"}
+    assert raw["cohort_policy"] == {"allow_partial": False}
+
+    loaded = load_config()
+    assert loaded["cohort_policy"]["allow_partial"] is False
+    assert set(loaded) == set(raw)
+
+
+def test_load_config_accepts_custom_path_and_returns_fresh_dicts(tmp_path: Path) -> None:
+    custom_path = tmp_path / "experiment.yaml"
+    custom_path.write_text(yaml.safe_dump(_valid_config()), encoding="utf-8")
+
+    first = load_config(custom_path)
+    second = load_config(custom_path)
+    assert first == second
+    assert type(first) is dict
+    assert type(first["cohorts"]) is dict
+    assert type(first["cohorts"]["oncology"]) is list
+    first["training"]["epochs"] = 999
+    assert second["training"]["epochs"] != 999
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "{}\n",
+        "cohorts: [not, a, mapping]\n",
+        "cohorts: [unterminated\n",
+    ],
+)
+def test_load_config_routes_empty_and_malformed_yaml_to_domain_error(
+    tmp_path: Path, content: str
+) -> None:
+    path = tmp_path / "invalid.yaml"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(ConfigValidationError):
+        load_config(path)
+
+
+def test_explicit_empty_config_is_validated_without_default_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_called = False
+
+    def unexpected_default_load(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal sentinel_called
+        sentinel_called = True
+        raise AssertionError("explicit config must not reload defaults")
+
+    monkeypatch.setattr(data, "load_config", unexpected_default_load)
+    with pytest.raises(ConfigValidationError):
+        cohort_slide_ids({})
+    assert sentinel_called is False
+
+
+def test_invalid_startup_config_fails_before_side_effect_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    invalid_path = tmp_path / "invalid.yaml"
+    invalid_path.write_text("{}\n", encoding="utf-8")
+    side_effect_called = False
+
+    def forbidden_side_effect() -> Path:
+        nonlocal side_effect_called
+        side_effect_called = True
+        raise AssertionError("side effect reached before config resolution")
+
+    monkeypatch.setattr(data, "pharma_processed_dir", forbidden_side_effect)
+    with pytest.raises(ConfigValidationError):
+        load_config(invalid_path)
+        data.pharma_processed_dir()
+    assert side_effect_called is False
