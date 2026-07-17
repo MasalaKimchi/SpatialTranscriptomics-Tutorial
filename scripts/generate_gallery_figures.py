@@ -27,13 +27,6 @@ st.set_seeds()
 sc.settings.set_figure_params(dpi=100, facecolor="white")
 
 
-def _need(path: str) -> None:
-    if not (st.processed_dir() / path).exists():
-        raise FileNotFoundError(
-            f"Missing {path}. Run the tutorial notebooks through the step that creates it."
-        )
-
-
 def fig_qc_histograms(adata) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
     axes[0].hist(adata.obs["total_counts"], bins=60)
@@ -136,7 +129,6 @@ def fig_integration(adata) -> None:
 def main() -> None:
     print("Generating gallery figures ->", st.figures_dir())
 
-    _need("adata_qc.h5ad")
     adata_qc = st.load_adata("adata_qc.h5ad")
     fig_qc_histograms(adata_qc)
     fig_spatial_qc(adata_qc)
@@ -144,14 +136,13 @@ def main() -> None:
     fig_markers_spatial(adata_qc)
     print("  04-06 figures OK")
 
-    _need("adata_clustered.h5ad")
     adata_cl = st.load_adata("adata_clustered.h5ad")
     fig_umap_clusters(adata_cl)
     fig_spatial_clusters(adata_cl)
     fig_cluster_dotplot(adata_cl)
     print("  07 figures OK")
 
-    if (st.processed_dir() / "adata_features.h5ad").exists():
+    if st.adata_reuse_status("adata_features.h5ad").reusable:
         adata_feat = st.load_adata("adata_features.h5ad")
         fig_integration(adata_feat)
         print("  10 figures OK")

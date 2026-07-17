@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import random
+import json
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -203,29 +204,197 @@ def get_image(adata, res: str = "hires") -> np.ndarray:
 # AnnData caching
 # ---------------------------------------------------------------------------
 
+_ROOT_H5AD_CHAIN = (
+    "adata_raw.h5ad",
+    "adata_qc.h5ad",
+    "adata_clustered.h5ad",
+    "adata_features.h5ad",
+)
 
-def save_adata(adata, filename: str) -> Path:
+
+def _root_h5ad_path(filename: str) -> Path:
+    """Resolve a tutorial cache path without changing the filesystem."""
+    if type(filename) is not str or Path(filename).name != filename:
+        raise ValueError("filename must be a plain cache basename")
+    return project_root() / "data" / "processed" / filename
+
+
+def _root_h5ad_fingerprint(
+    filename: str,
+    *,
+    source: dict[str, object] | None = None,
+    upstream: dict[str, object] | None = None,
+):
+    from utils.artifacts import build_fingerprint
+
+    if filename in _ROOT_H5AD_CHAIN:
+        index = _ROOT_H5AD_CHAIN.index(filename)
+        source_identity: dict[str, object] = (
+            {"provider": "squidpy", "dataset": "visium_hne"}
+            if index == 0
+            else {}
+        )
+        upstream_identity = (
+            {}
+            if index == 0
+            else {
+                "artifact": _ROOT_H5AD_CHAIN[index - 1],
+                "fingerprint": _root_h5ad_fingerprint(
+                    _ROOT_H5AD_CHAIN[index - 1]
+                ).digest,
+            }
+        )
+    else:
+        if type(source) is not dict or type(upstream) is not dict:
+            from utils.artifacts import ArtifactValidationError
+
+            raise ArtifactValidationError(
+                "invalid_fingerprint_inputs",
+                artifact_kind="root_h5ad",
+                basename=filename,
+            )
+        source_identity = source
+        upstream_identity = upstream
+    return build_fingerprint(
+        "root_h5ad",
+        {
+            "configuration": {},
+            "source": source_identity,
+            "upstream": upstream_identity,
+            "identity": {"filename": filename, "stage": filename.removesuffix(".h5ad")},
+        },
+    )
+
+
+def _root_h5ad_schema(value, filename: str):
+    from utils.artifacts import ArtifactValidationError
+
+    obs_names = value.obs_names.tolist()
+    var_names = value.var_names.tolist()
+    if (
+        any(type(item) is not str or not item for item in (*obs_names, *var_names))
+        or len(set(obs_names)) != len(obs_names)
+        or len(set(var_names)) != len(var_names)
+    ):
+        raise ArtifactValidationError(
+            "reader_validation_failed", artifact_kind="root_h5ad", basename=filename
+        )
+    required_obs: tuple[str, ...] = ()
+    required_obsm: tuple[str, ...] = ()
+    if filename in {"adata_qc.h5ad", "adata_clustered.h5ad", "adata_features.h5ad"}:
+        required_obs = ("total_counts", "n_genes_by_counts", "pct_counts_mt")
+    if filename in {"adata_clustered.h5ad", "adata_features.h5ad"}:
+        required_obs += ("clusters",)
+        required_obsm = ("X_pca",)
+    if any(column not in value.obs for column in required_obs) or any(
+        key not in value.obsm for key in required_obsm
+    ):
+        raise ArtifactValidationError(
+            "reader_validation_failed", artifact_kind="root_h5ad", basename=filename
+        )
+    schema = {
+        "n_obs": int(value.n_obs),
+        "n_vars": int(value.n_vars),
+        "obs_names_sha256": __import__("hashlib").sha256(
+            json.dumps(obs_names, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "var_names_sha256": __import__("hashlib").sha256(
+            json.dumps(var_names, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "required_obs": list(required_obs),
+        "required_obsm": list(required_obsm),
+    }
+    return schema
+
+
+def _root_h5ad_reader(path: Path, filename: str):
+    import anndata as ad
+
+    value = ad.read_h5ad(path)
+    return value, _root_h5ad_schema(value, filename)
+
+
+def save_adata(
+    adata,
+    filename: str,
+    *,
+    source: dict[str, object] | None = None,
+    upstream: dict[str, object] | None = None,
+) -> Path:
     """Write ``adata`` to ``data/processed/<filename>`` and return the path."""
-    path = processed_dir() / filename
-    adata.write_h5ad(path)
+    from utils.artifacts import ARTIFACT_CONTRACT_VERSIONS, publish_artifact
+
+    path = _root_h5ad_path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fingerprint = _root_h5ad_fingerprint(filename, source=source, upstream=upstream)
+    schema = _root_h5ad_schema(adata, filename)
+    publish_artifact(
+        path,
+        artifact_kind="root_h5ad",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["root_h5ad"],
+        fingerprint=fingerprint,
+        payload_format="h5ad",
+        payload_schema=schema,
+        write_payload=lambda temporary: adata.write_h5ad(temporary),
+        reader=lambda temporary: _root_h5ad_reader(temporary, filename),
+    )
     return path
 
 
-def load_adata(filename: str):
+def load_adata(
+    filename: str,
+    *,
+    source: dict[str, object] | None = None,
+    upstream: dict[str, object] | None = None,
+):
     """Read an AnnData from ``data/processed/<filename>``.
 
     Raises a helpful error (naming the notebook that creates it) if absent.
     """
-    import anndata as ad
+    from utils.artifacts import (
+        ARTIFACT_CONTRACT_VERSIONS,
+        ArtifactValidationError,
+        admit_artifact,
+    )
 
-    path = processed_dir() / filename
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Cached AnnData not found: {path}\n"
-            "Run the earlier notebook that produces it before this one "
-            "(each notebook saves its result into data/processed/)."
+    path = _root_h5ad_path(filename)
+    fingerprint = _root_h5ad_fingerprint(filename, source=source, upstream=upstream)
+    try:
+        admission = admit_artifact(
+            path,
+            expected_kind="root_h5ad",
+            expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["root_h5ad"],
+            expected_fingerprint=fingerprint,
+            reader=lambda candidate: _root_h5ad_reader(candidate, filename),
         )
-    return ad.read_h5ad(path)
+    except ArtifactValidationError as exc:
+        if exc.reason_code == "missing_payload":
+            raise FileNotFoundError(
+                f"Cached AnnData not found: {path}\n"
+                "Run the earlier notebook that produces it before this one."
+            ) from exc
+        raise
+    value, observed_schema = admission.value
+    if json.loads(admission.manifest.payload_schema_json) != observed_schema:
+        raise ArtifactValidationError(
+            "payload_schema_mismatch",
+            artifact_kind="root_h5ad",
+            basename=filename,
+        )
+    return value
+
+
+def adata_reuse_status(filename: str):
+    """Return contract-aware optional-cache status without creating directories."""
+    from utils.artifacts import ARTIFACT_CONTRACT_VERSIONS, artifact_reuse_status
+
+    return artifact_reuse_status(
+        _root_h5ad_path(filename),
+        expected_kind="root_h5ad",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["root_h5ad"],
+        expected_fingerprint=_root_h5ad_fingerprint(filename),
+        reader=lambda candidate: _root_h5ad_reader(candidate, filename),
+    )
 
 
 # ---------------------------------------------------------------------------

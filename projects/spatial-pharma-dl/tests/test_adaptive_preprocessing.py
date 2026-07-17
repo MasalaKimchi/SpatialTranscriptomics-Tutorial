@@ -568,8 +568,49 @@ def test_real_scanpy_capped_preprocessing_round_trip_matches_run_provenance(
 ) -> None:
     """Execute the scientific stack and compare both persisted provenance surfaces."""
     path = _run_real_scanpy_preprocessing(tmp_path)
-    monkeypatch.setattr(data, "pharma_processed_dir", lambda: tmp_path)
-    restored = data.load_slide("slide_real")
+    generated = ad.read_h5ad(path)
+    generated.obs_names = pd.Index(
+        pd.array(generated.obs_names.tolist(), dtype=object), dtype=object
+    )
+    generated.var_names = pd.Index(
+        pd.array(generated.var_names.tolist(), dtype=object), dtype=object
+    )
+    for column in ("slide_id", "clusters"):
+        generated.obs[column] = pd.Series(
+            pd.array(generated.obs[column].tolist(), dtype=object),
+            index=generated.obs.index,
+            dtype=object,
+        )
+    raw = generated.raw.to_adata()
+    raw.obs_names = pd.Index(
+        pd.array(raw.obs_names.tolist(), dtype=object), dtype=object
+    )
+    raw.var_names = pd.Index(
+        pd.array(raw.var_names.tolist(), dtype=object), dtype=object
+    )
+    generated.raw = raw
+    generated.uns["spatial_pharma_seed"] = 903
+    generated.obsm["spatial"] = np.zeros((generated.n_obs, 2), dtype=np.float64)
+    generated.uns["spatial"] = {
+        "slide_real": {
+            "images": {"hires": np.zeros((2, 2, 3), dtype=np.uint8)},
+            "scalefactors": {
+                "tissue_hires_scalef": 1.0,
+                "spot_diameter_fullres": 1.0,
+            },
+        }
+    }
+    cfg = _valid_config()
+    cfg["seed"] = 903
+    cfg["preprocessing"].update(
+        n_top_genes_hvg=100,
+        n_pcs=50,
+        n_neighbors=50,
+        n_pcs_neighbors=30,
+    )
+    monkeypatch.setattr(data.st, "project_root", lambda: tmp_path)
+    data.save_slide(generated, "slide_real", cfg=cfg)
+    restored = data.load_slide("slide_real", cfg=cfg)
     record = restored.uns["spatial_pharma_preprocessing"]
     resolved = record["resolved"]
 
@@ -586,7 +627,9 @@ def test_real_scanpy_capped_preprocessing_round_trip_matches_run_provenance(
     assert "clusters" in restored.obs
 
     runner = _load_runner()
-    monkeypatch.setattr(runner, "load_slide", data.load_slide)
+    monkeypatch.setattr(
+        runner, "load_slide", lambda slide_id: data.load_slide(slide_id, cfg=cfg)
+    )
     admitted = SimpleNamespace(slide_ids=("slide_real",))
     first = runner._assemble_preprocessing_manifest(admitted)
     second = runner._assemble_preprocessing_manifest(admitted)
