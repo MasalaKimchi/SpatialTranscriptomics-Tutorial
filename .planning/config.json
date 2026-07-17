@@ -42,7 +42,8 @@
     "security_enforcement": true,
     "security_asvs_level": 1,
     "security_block_on": "high",
-    "_auto_chain_active": true
+    "_auto_chain_active": true,
+    "use_worktrees": false
   },
   "ship": {
     "pr_body_sections": []
@@ -56,5 +57,6 @@
   "claude_md_path": "./CLAUDE.md",
   "resolve_model_ids": "omit",
   "mode": "yolo",
-  "granularity": "fine"
+  "granularity": "fine",
+  "runtime": "codex"
 }
