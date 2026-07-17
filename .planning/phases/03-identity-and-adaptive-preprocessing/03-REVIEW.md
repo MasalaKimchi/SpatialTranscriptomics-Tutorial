@@ -108,7 +108,7 @@ resolved_findings: 7
 
 ## Verification Performed
 
-- Reviewed the complete `8256f71..0503519` production/test/fix diff, `03-REVIEW-FIX.md`, and all Phase 3 planning/evidence artifacts.
+- Reviewed the complete `8256f71..a22fc1a` production/test/fix/evidence diff, `03-REVIEW-FIX.md`, and all Phase 3 planning artifacts.
 - Traced ordinary patch loading, foundation cache hit/miss, label and patch producers, preprocessing orchestration, H5AD restoration, and admitted-order manifest assembly.
 - Re-ran targeted read-only probes for persisted wrong-slide AnnData, impossible stage-count provenance, hostile custom-metaclass values, and oversized/control-character key diagnostics; all original warnings are closed.
 
@@ -130,6 +130,9 @@ resolved_findings: 7
 - Third-iteration affected Phase 3 and boundary regression suite: 185 passed; scoped Ruff passed.
 - Third-iteration canonical `python scripts/verify.py fast`: repository Ruff passed and all 263 strict offline tests passed in 19.70 seconds.
 - Static re-review confirmed duplicate schema issues are complete before `frame[column]` or `obs["slide_id"]` selection and no pandas `TypeError` or misleading cell issue can escape for the covered duplicate schemas.
+- Independent final-final focused Phase 3 modules: 106 passed in 18.39 seconds.
+- Independent final-final canonical `python scripts/verify.py fast`: repository Ruff passed and all 263 strict offline tests passed in 20.63 seconds.
+- Independent final-final probes covered duplicate `slide_id` and `spot_id` on both alignment sides and persisted AnnData, duplicate reserved columns with excess counts, hostile labels on both alignment sides and optional/required AnnData, wrong persisted slides, all three impossible preprocessing histories, custom metaclass values, and 200,000-character control-bearing diagnostics. Every boundary returned the intended structured evidence with no forbidden hook, pandas `TypeError`, raw control, or unbounded message.
 
 ## Positive Observations
 
