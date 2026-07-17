@@ -324,6 +324,41 @@ class PreprocessingManifest:
             for section, keys in expected_sections.items():
                 if type(record[section]) is not dict or set(record[section]) != keys:
                     raise _manifest_error(f"Record {index} has an invalid {section} section.")
+            try:
+                expected = finalize_preprocessing_resolution(
+                    resolve_post_qc_preprocessing(
+                        slide_id=slide_id,
+                        input_spots=record["counts"]["input_spots"],
+                        input_genes=record["counts"]["input_genes"],
+                        after_filter_cells_spots=record["counts"][
+                            "after_filter_cells_spots"
+                        ],
+                        after_filter_cells_genes=record["counts"][
+                            "after_filter_cells_genes"
+                        ],
+                        after_filter_genes_spots=record["counts"][
+                            "after_filter_genes_spots"
+                        ],
+                        after_filter_genes_genes=record["counts"][
+                            "after_filter_genes_genes"
+                        ],
+                        post_qc_spots=record["counts"]["post_qc_spots"],
+                        post_qc_genes=record["counts"]["post_qc_genes"],
+                        requested_hvg=record["requested"]["hvg"],
+                        requested_pcs=record["requested"]["pca"],
+                        requested_neighbors=record["requested"]["neighbors"],
+                        requested_graph_pcs=record["requested"]["graph_pcs"],
+                    ),
+                    actual_hvgs=record["counts"]["actual_hvgs"],
+                ).to_dict()
+            except PreprocessingValidationError:
+                raise _manifest_error(
+                    f"Record {index} contains invalid preprocessing values."
+                ) from None
+            if record != expected:
+                raise _manifest_error(
+                    f"Record {index} is inconsistent with deterministic resolution."
+                )
         value = {
             "schema_version": "spatial-pharma-preprocessing-manifest-v1",
             "slide_ids": admitted_ids,

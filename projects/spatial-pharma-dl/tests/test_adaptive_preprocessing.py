@@ -318,6 +318,13 @@ def test_manifest_rejects_hostile_values_before_hooks_or_serialization() -> None
     assert calls == []
 
 
+def test_manifest_rejects_primitive_but_semantically_malformed_record() -> None:
+    record = _record("slide_a")
+    record["counts"]["actual_hvgs"] = True
+    with pytest.raises(PreprocessingValidationError, match="malformed_preprocessing_manifest"):
+        PreprocessingManifest(slide_ids=["slide_a"], records=[record])
+
+
 def test_pipeline_manifest_failure_precedes_write_and_downstream(tmp_path, monkeypatch) -> None:
     runner = _load_runner()
     cfg = _valid_config()
