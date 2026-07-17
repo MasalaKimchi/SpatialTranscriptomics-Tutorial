@@ -13,6 +13,7 @@ import json
 import math
 import os
 import stat
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -271,13 +272,21 @@ def _manifest_from_tree(tree: object, *, expected_basename: str | None = None) -
         raise _error("stale_fingerprint", kind=kind, basename=basename)
     if fingerprint["algorithm"] != FINGERPRINT_ALGORITHM or not _is_sha256(fingerprint["digest"]):
         raise _error("unsupported_manifest", kind=kind, basename=basename)
+    fingerprint_inputs = fingerprint["inputs"]
+    if type(fingerprint_inputs) is not dict:
+        raise _error("malformed_manifest", kind=kind, basename=basename)
+    if (
+        fingerprint_inputs.get("artifact_kind") != kind
+        or fingerprint_inputs.get("contract_version") != root["contract_version"]
+    ):
+        raise _error("stale_fingerprint", kind=kind, basename=basename)
     if type(payload["format"]) is not str or not payload["format"]:
         raise _error("malformed_manifest", kind=kind, basename=basename)
     if type(payload["byte_count"]) is not int or payload["byte_count"] < 0:
         raise _error("malformed_manifest", kind=kind, basename=basename)
     if not _is_sha256(payload["sha256"]):
         raise _error("malformed_manifest", kind=kind, basename=basename)
-    inputs_json = _canonical_json(fingerprint["inputs"])
+    inputs_json = _canonical_json(fingerprint_inputs)
     observed_digest = hashlib.sha256(inputs_json.encode("utf-8")).hexdigest()
     if not hmac.compare_digest(observed_digest, fingerprint["digest"]):
         raise _error("stale_fingerprint", kind=kind, basename=basename)
@@ -360,7 +369,11 @@ def build_fingerprint(
         for key in _CONFIG_PROJECTIONS[artifact_kind]
         if key in configuration
     }
-    version = contract_version or ARTIFACT_CONTRACT_VERSIONS[artifact_kind]
+    version = (
+        ARTIFACT_CONTRACT_VERSIONS[artifact_kind]
+        if contract_version is None
+        else contract_version
+    )
     if type(version) is not str or not version or len(version) > 128:
         raise _error("invalid_fingerprint_inputs", kind=artifact_kind)
     projection = {
@@ -568,6 +581,160 @@ def artifact_reuse_status(
     )
 
 
+def _completed_manifest(
+    *,
+    artifact_kind: str,
+    contract_version: str,
+    fingerprint: ArtifactFingerprint,
+    payload_filename: str,
+    payload_format: str,
+    payload_byte_count: int,
+    payload_sha256: str,
+    payload_schema: object,
+) -> ArtifactManifest:
+    if type(artifact_kind) is not str or artifact_kind not in ARTIFACT_CONTRACT_VERSIONS:
+        raise _error("unsupported_artifact_kind")
+    if type(contract_version) is not str or not contract_version:
+        raise _error("invalid_fingerprint_inputs", kind=artifact_kind)
+    if type(fingerprint) is not ArtifactFingerprint:
+        raise _error("invalid_fingerprint_inputs", kind=artifact_kind)
+    if type(payload_format) is not str or not payload_format:
+        raise _error("malformed_manifest", kind=artifact_kind)
+    admitted_schema = _admit_tree(payload_schema, kind=artifact_kind)
+    tree = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "artifact_kind": artifact_kind,
+        "contract_version": contract_version,
+        "complete": True,
+        "fingerprint": fingerprint.to_dict(),
+        "payload": {
+            "filename": payload_filename,
+            "format": payload_format,
+            "byte_count": payload_byte_count,
+            "sha256": payload_sha256,
+            "schema": admitted_schema,
+        },
+    }
+    return _manifest_from_tree(tree, expected_basename=payload_filename)
+
+
+def _fsync_file(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _make_temp_path(final_path: Path, *, suffix: str) -> Path:
+    descriptor, temporary = tempfile.mkstemp(
+        dir=final_path.parent,
+        prefix=f".{final_path.name}.",
+        suffix=suffix,
+    )
+    os.close(descriptor)
+    return Path(temporary)
+
+
+def publish_artifact(
+    final_path: str | os.PathLike[str],
+    *,
+    artifact_kind: str,
+    contract_version: str,
+    fingerprint: ArtifactFingerprint,
+    payload_format: str,
+    payload_schema: object,
+    write_payload: Callable[[Path], object],
+    reader: Callable[[Path], _T],
+    _operation_hook: Callable[[str], object] | None = None,
+) -> ArtifactManifest:
+    """Publish one validated payload/sidecar pair with a manifest-last commit."""
+    path = Path(final_path)
+    basename = _bounded_basename(path.name)
+    if basename != path.name:
+        raise _error("publication_failed", kind=artifact_kind, basename=basename)
+    hook = _operation_hook or (lambda _operation: None)
+    payload_suffix = "".join(path.suffixes)
+    temp_payload: Path | None = None
+    temp_manifest: Path | None = None
+    try:
+        temp_payload = _make_temp_path(path, suffix=payload_suffix)
+        temp_manifest = _make_temp_path(path, suffix=MANIFEST_SUFFIX)
+
+        hook("write_payload")
+        write_payload(temp_payload)
+        hook("fsync_payload")
+        _fsync_file(temp_payload)
+        byte_count, checksum, _state = _hash_payload_descriptor(
+            temp_payload, kind=artifact_kind, basename=basename
+        )
+        if byte_count == 0:
+            raise _error("invalid_payload_file", kind=artifact_kind, basename=basename)
+        manifest = _completed_manifest(
+            artifact_kind=artifact_kind,
+            contract_version=contract_version,
+            fingerprint=fingerprint,
+            payload_filename=basename,
+            payload_format=payload_format,
+            payload_byte_count=byte_count,
+            payload_sha256=checksum,
+            payload_schema=payload_schema,
+        )
+        sidecar_bytes = manifest.canonical_json.encode("utf-8")
+
+        hook("write_manifest")
+        with temp_manifest.open("wb") as handle:
+            handle.write(sidecar_bytes)
+            handle.flush()
+        hook("fsync_manifest")
+        _fsync_file(temp_manifest)
+
+        hook("validate")
+        admission = admit_artifact(
+            temp_payload,
+            expected_kind=artifact_kind,
+            expected_contract_version=contract_version,
+            expected_fingerprint=fingerprint,
+            reader=reader,
+            _manifest_path=temp_manifest,
+            _logical_basename=basename,
+        )
+        if admission.manifest.canonical_json.encode("utf-8") != sidecar_bytes:
+            raise _error("unstable_manifest", kind=artifact_kind, basename=basename)
+        if temp_manifest.read_bytes() != sidecar_bytes:
+            raise _error("unstable_manifest", kind=artifact_kind, basename=basename)
+
+        hook("replace_payload")
+        os.replace(temp_payload, path)
+        hook("fsync_directory_first")
+        _fsync_directory(path.parent)
+        hook("replace_manifest")
+        os.replace(temp_manifest, manifest_path(path))
+        hook("fsync_directory_final")
+        _fsync_directory(path.parent)
+        return manifest
+    except Exception as exc:
+        for temporary in (temp_payload, temp_manifest):
+            if temporary is None:
+                continue
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise _error(
+            "publication_failed", kind=artifact_kind, basename=basename
+        ) from exc
+
+
 __all__ = [
     "ARTIFACT_CONTRACT_VERSIONS",
     "ArtifactAdmission",
@@ -581,4 +748,5 @@ __all__ = [
     "build_fingerprint",
     "manifest_path",
     "parse_manifest_bytes",
+    "publish_artifact",
 ]

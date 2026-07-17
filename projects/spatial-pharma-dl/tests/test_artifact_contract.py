@@ -19,6 +19,7 @@ from utils.artifacts import (
     build_fingerprint,
     manifest_path,
     parse_manifest_bytes,
+    publish_artifact,
 )
 
 pytestmark = pytest.mark.offline
@@ -100,6 +101,19 @@ def test_contract_version_changes_fingerprint() -> None:
     first = build_fingerprint("patch", _inputs())
     second = build_fingerprint("patch", _inputs(), contract_version=original + ".next")
     assert first.digest != second.digest
+
+
+def test_manifest_contract_must_match_fingerprinted_contract(tmp_path: Path) -> None:
+    path = tmp_path / "mismatch.npz"
+    _write_pair(path)
+    candidate = json.loads(manifest_path(path).read_text(encoding="utf-8"))
+    candidate["contract_version"] = "patch-v2"
+    with pytest.raises(ArtifactValidationError) as caught:
+        parse_manifest_bytes(
+            json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode(),
+            expected_basename=path.name,
+        )
+    assert caught.value.reason_code == "stale_fingerprint"
 
 
 class HostileDict(dict):
@@ -309,3 +323,139 @@ def test_reuse_status_is_typed_and_missing_parent_has_no_side_effect(tmp_path: P
     assert not status.reusable
     assert status.reason_code == "missing_payload"
     assert not path.parent.exists()
+
+
+def _publish(
+    path: Path,
+    payload: bytes,
+    *,
+    operation_log: list[str] | None = None,
+    fault_at: str | None = None,
+):
+    fingerprint = build_fingerprint("patch", _inputs())
+
+    def hook(operation: str) -> None:
+        if operation_log is not None:
+            operation_log.append(operation)
+        if operation == fault_at:
+            raise OSError("injected publication fault")
+
+    manifest = publish_artifact(
+        path,
+        artifact_kind="patch",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        fingerprint=fingerprint,
+        payload_format="bytes",
+        payload_schema={"encoding": "bytes"},
+        write_payload=lambda temporary: temporary.write_bytes(payload),
+        reader=lambda temporary: temporary.read_bytes(),
+        _operation_hook=hook,
+    )
+    return fingerprint, manifest
+
+
+def test_atomic_publication_validates_before_payload_first_manifest_last(tmp_path: Path) -> None:
+    path = tmp_path / "result.npz"
+    operations: list[str] = []
+    fingerprint, manifest = _publish(path, b"new-generation", operation_log=operations)
+    assert operations == [
+        "write_payload",
+        "fsync_payload",
+        "write_manifest",
+        "fsync_manifest",
+        "validate",
+        "replace_payload",
+        "fsync_directory_first",
+        "replace_manifest",
+        "fsync_directory_final",
+    ]
+    assert operations.index("validate") < operations.index("replace_payload")
+    assert path.read_bytes() == b"new-generation"
+    assert manifest_path(path).read_bytes() == manifest.canonical_json.encode("utf-8")
+    admission = admit_artifact(
+        path,
+        expected_kind="patch",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        expected_fingerprint=fingerprint,
+        reader=lambda candidate: candidate.read_bytes(),
+    )
+    assert admission.value == b"new-generation"
+
+
+PUBLICATION_FAULTS = (
+    "write_payload",
+    "fsync_payload",
+    "write_manifest",
+    "fsync_manifest",
+    "validate",
+    "replace_payload",
+    "fsync_directory_first",
+    "replace_manifest",
+    "fsync_directory_final",
+)
+
+
+@pytest.mark.parametrize("fault_at", PUBLICATION_FAULTS)
+@pytest.mark.parametrize("replacement", [False, True])
+def test_atomic_fault_states_are_never_falsely_reusable(
+    tmp_path: Path, fault_at: str, replacement: bool
+) -> None:
+    path = tmp_path / "result.npz"
+    fingerprint = build_fingerprint("patch", _inputs())
+    if replacement:
+        _publish(path, b"old-generation")
+
+    with pytest.raises(ArtifactValidationError) as caught:
+        _publish(path, b"new-generation", fault_at=fault_at)
+    assert caught.value.reason_code == "publication_failed"
+
+    status = artifact_reuse_status(
+        path,
+        expected_kind="patch",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        expected_fingerprint=fingerprint,
+        reader=lambda candidate: candidate.read_bytes(),
+    )
+    if fault_at == "fsync_directory_final":
+        assert status.reusable
+        assert status.admission is not None
+        assert status.admission.value == b"new-generation"
+    elif fault_at in {"fsync_directory_first", "replace_manifest"}:
+        assert not status.reusable
+        assert status.reason_code in {"legacy_artifact", "byte_count_mismatch", "checksum_mismatch"}
+    elif replacement:
+        assert status.reusable
+        assert status.admission is not None
+        assert status.admission.value == b"old-generation"
+    else:
+        assert not status.reusable
+        assert status.reason_code == "missing_payload"
+
+    assert not list(tmp_path.glob(".result.npz.*"))
+
+
+def test_publication_temp_paths_are_unique_same_directory_and_suffix_preserving(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "result.npz"
+    seen: list[Path] = []
+
+    def writer(temporary: Path) -> None:
+        seen.append(temporary)
+        assert temporary.parent == path.parent
+        assert temporary.suffix == ".npz"
+        temporary.write_bytes(b"generation-one")
+
+    fingerprint = build_fingerprint("patch", _inputs())
+    for payload in (b"generation-one", b"generation-two"):
+        publish_artifact(
+            path,
+            artifact_kind="patch",
+            contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+            fingerprint=fingerprint,
+            payload_format="bytes",
+            payload_schema={"encoding": "bytes"},
+            write_payload=(writer if payload == b"generation-one" else lambda temporary: (seen.append(temporary), temporary.write_bytes(payload))),
+            reader=lambda temporary: temporary.read_bytes(),
+        )
+    assert len({candidate.name for candidate in seen}) == 2
