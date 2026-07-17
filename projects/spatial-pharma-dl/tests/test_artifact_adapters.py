@@ -8,9 +8,15 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
-from src import data, eval as evaluation, foundation, labels, patches
-from src.validation import finalize_preprocessing_resolution, resolve_post_qc_preprocessing
+from src import data, eval as evaluation, foundation, labels, models, patches
+from src.validation import (
+    PreprocessingManifest,
+    admit_run,
+    finalize_preprocessing_resolution,
+    resolve_post_qc_preprocessing,
+)
 from utils import st_helpers as st
 from utils.artifacts import ArtifactValidationError, manifest_path
 
@@ -70,6 +76,287 @@ def _processed_adata(factory, slide_id: str = "slide_a"):
     adata.uns["spatial_pharma_preprocessing"] = record
     adata.uns["spatial_pharma_preprocessing_canonical_json"] = canonical
     return adata
+
+
+def test_real_nineteen_artifact_pipeline_uses_production_adapters(
+    tmp_path, monkeypatch, synthetic_anndata_factory
+):
+    """Round-trip every retained production artifact through its real adapter."""
+    monkeypatch.setattr(st, "project_root", lambda: tmp_path)
+    cfg = data.load_config()
+    lineage = {"admitted_run": "current"}
+    paths = []
+
+    root = _make_h5ad_writable(synthetic_anndata_factory(n_spots=4, n_genes=4))
+    root.obs["total_counts"] = np.asarray([10, 11, 12, 13], dtype=np.int64)
+    root.obs["n_genes_by_counts"] = np.asarray([3, 3, 4, 4], dtype=np.int64)
+    root.obs["pct_counts_mt"] = np.asarray([1.0, 2.0, 3.0, 4.0])
+    root.obs["clusters"] = pd.Series(
+        pd.array(["0"] * 4, dtype=object), index=root.obs.index, dtype=object
+    )
+    root.obsm["X_pca"] = np.zeros((4, 2), dtype=np.float32)
+    for filename in (
+        "adata_raw.h5ad",
+        "adata_qc.h5ad",
+        "adata_clustered.h5ad",
+        "adata_features.h5ad",
+    ):
+        paths.append(st.save_adata(root, filename))
+        assert st.load_adata(filename).shape == (4, 4)
+
+    processed = _processed_adata(synthetic_anndata_factory)
+    paths.append(data.save_slide(processed, "slide_a", cfg=cfg))
+    assert data.load_slide("slide_a", cfg=cfg).n_obs == 4
+
+    label_frame = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a"],
+            "spot_id": ["spot_0", "spot_1"],
+            "cluster": ["0", "0"],
+            "cluster_id": [0, 0],
+            "domain_name": ["domain_0", "domain_0"],
+            "tme_class": ["other", "other"],
+            "tme_class_id": [0, 0],
+        }
+    )
+    paths.append(labels.save_label_table(label_frame, "slide_a", cfg=cfg))
+    pd.testing.assert_frame_equal(labels.load_label_table("slide_a", cfg=cfg), label_frame)
+    domain_frame = label_frame[
+        ["slide_id", "cluster", "domain_name", "tme_class"]
+    ].drop_duplicates(ignore_index=True)
+    paths.append(labels.save_domain_table(domain_frame, ["slide_a"], cfg=cfg))
+    pd.testing.assert_frame_equal(
+        labels.load_domain_table(["slide_a"], cfg=cfg), domain_frame
+    )
+
+    patch_meta = label_frame[["slide_id", "spot_id"]].assign(
+        x=[1.0, 2.0], y=[3.0, 4.0], native_patch_px=[8, 8]
+    )
+    patch_values = np.zeros((2, 3, 4, 4), dtype=np.float32)
+    paths.append(
+        patches.save_patch_arrays("slide_a", patch_values, patch_meta, cfg=cfg)
+    )
+    np.testing.assert_array_equal(
+        patches.load_patch_arrays("slide_a", cfg=cfg)[0], patch_values
+    )
+    paths.append(patches.save_patch_index(label_frame, cfg=cfg))
+    pd.testing.assert_frame_equal(
+        patches.load_patch_index(cfg=cfg, sample_ids=["slide_a"]), label_frame
+    )
+
+    spec = foundation.FoundationModelSpec(
+        repo_id="local/test",
+        backend="test",
+        license="test",
+        mean=(0.0, 0.0, 0.0),
+        std=(1.0, 1.0, 1.0),
+        embedding_dim=2,
+    )
+    monkeypatch.setitem(foundation.FOUNDATION_MODELS, "kaiko_vits16", spec)
+    monkeypatch.setattr(
+        foundation,
+        "load_slide_patches",
+        lambda *_args, **_kwargs: (
+            patch_values,
+            label_frame[["slide_id", "spot_id"]].assign(_patch_source_row=[0, 1]),
+        ),
+    )
+    expected_embeddings = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    monkeypatch.setattr(
+        foundation,
+        "extract_frozen_embeddings",
+        lambda *_args, **_kwargs: expected_embeddings.copy(),
+    )
+    bundle = (object(), "cpu", spec)
+    foundation.load_or_extract_slide_embeddings(
+        "slide_a", label_frame, cfg=cfg, encoder_bundle=bundle
+    )
+    embedding_path = foundation._embedding_cache_path("slide_a", cfg)
+    paths.append(embedding_path)
+    cached, _ = foundation.load_or_extract_slide_embeddings(
+        "slide_a", label_frame, cfg=cfg, encoder_bundle=bundle
+    )
+    np.testing.assert_array_equal(cached, expected_embeddings)
+
+    checkpoint_path = tmp_path / "outputs" / "model.pt"
+    checkpoint_lineage = {"patch": "current", "labels": "current"}
+    models.save_model_checkpoint(
+        checkpoint_path,
+        model=torch.nn.Sequential(torch.nn.Linear(3, 2)),
+        metadata={
+            "model_name": "resnet18",
+            "experiment": "v2",
+            "pretrained": False,
+            "n_classes": 2,
+            "n_reg_targets": 1,
+            "cls_col": "tme_class_id",
+            "reg_cols": ["gene_A"],
+            "val_slide": "slide_b",
+            "train_slides": ["slide_a"],
+            "fold": 0,
+        },
+        cfg=cfg,
+        upstream_lineage=checkpoint_lineage,
+    )
+    paths.append(checkpoint_path)
+    assert models.load_local_checkpoint_payload(
+        checkpoint_path, cfg=cfg, upstream_lineage=checkpoint_lineage
+    )["fold"] == 0
+
+    report_path = tmp_path / "outputs" / "benchmark.csv"
+    report_rows = [
+        {
+            "model": "cnn",
+            "fold": 0,
+            "val_slide": "slide_a",
+            "balanced_accuracy": 0.5,
+            "macro_f1": 0.4,
+            "mean_pearson_r": 0.2,
+            "mean_r2": 0.1,
+        }
+    ]
+    paths.append(
+        evaluation.save_benchmark_report(
+            report_rows, report_path, cfg=cfg, upstream_lineage=lineage
+        )
+    )
+    assert len(
+        evaluation.load_benchmark_report(
+            report_path,
+            cfg=cfg,
+            upstream_lineage=lineage,
+            expected_row_identity=[
+                [cfg.get("experiment", "v2"), "cnn", 0, "slide_a"]
+            ],
+        )
+    ) == 1
+
+    configured_ids = [
+        slide_id
+        for cohort in ("oncology", "external", "benchmark")
+        for slide_id in cfg["cohorts"][cohort]
+    ]
+    cohort_value = admit_run(cfg, available_slide_ids=configured_ids).manifest.to_dict()
+    preprocessing_value = PreprocessingManifest(
+        slide_ids=["slide_a"],
+        records=[processed.uns["spatial_pharma_preprocessing"]],
+    ).to_dict()
+    json_specs = (
+        ("cohort_manifest", "cohort_manifest", cohort_value),
+        ("preprocessing_manifest", "preprocessing_manifest", preprocessing_value),
+        (
+            "experiment_summary",
+            "summary",
+            {
+                "experiment": "v2",
+                "classification_col": "tme_class_id",
+                "regression_targets": ["gene_A"],
+                "context_scale": 2.0,
+                "patch_version": "v1",
+                "cnn_mean_balanced_accuracy": 0.5,
+                "cnn_mean_pearson_r": 0.2,
+                "rf_mean_balanced_accuracy": 0.4,
+                "rf_mean_pearson_r": 0.1,
+            },
+        ),
+    )
+    for result_name, artifact_kind, value in json_specs:
+        path = tmp_path / "outputs" / f"{result_name}.json"
+        paths.append(
+            evaluation.save_json_result(
+                value,
+                path,
+                result_name=result_name,
+                artifact_kind=artifact_kind,
+                cfg=cfg,
+                upstream_lineage=lineage,
+            )
+        )
+        assert evaluation.load_json_result(
+            path,
+            result_name=result_name,
+            artifact_kind=artifact_kind,
+            cfg=cfg,
+            upstream_lineage=lineage,
+            expected_value=value,
+        ) == value
+
+    table_specs = {
+        "cohort_summary": pd.DataFrame(
+            {
+                "slide_id": ["slide_a"],
+                "n_spots": [4],
+                "n_genes": [4],
+                "n_clusters": [1],
+                "median_genes": [3.5],
+                "median_counts": [11.5],
+                "median_mito_pct": [2.5],
+            }
+        ),
+        "training_history": pd.DataFrame(
+            {
+                "fold": [0],
+                "val_slide": ["slide_a"],
+                "epoch": [0],
+                "train_loss": [1.0],
+                "val_loss": [1.1],
+            }
+        ),
+        "nested_loso_results": pd.DataFrame(
+            {
+                "model": ["cnn"],
+                "fold": [0],
+                "held_out_slide": ["slide_a"],
+                "task": ["classification"],
+                "n_train": [2],
+                "n_test": [1],
+                "coverage": [1.0],
+                "selected_candidate": ["base"],
+                "inner_macro_f1": [0.5],
+                "accuracy": [0.5],
+                "macro_f1": [0.5],
+                "balanced_accuracy": [0.5],
+                "majority_macro_f1": [0.3],
+                "majority_balanced_accuracy": [0.5],
+            }
+        ),
+        "model_task_summary": pd.DataFrame(
+            {
+                "task": ["classification"],
+                "model": ["cnn"],
+                "mean_macro_f1": [0.5],
+                "min_macro_f1": [0.5],
+                "mean_balanced_accuracy": [0.5],
+                "majority_macro_f1": [0.3],
+                "mean_coverage": [1.0],
+                "f1_lift_vs_majority": [0.2],
+            }
+        ),
+    }
+    for table_name, frame in table_specs.items():
+        path = tmp_path / "outputs" / f"{table_name}.csv"
+        paths.append(
+            evaluation.save_result_table(
+                frame,
+                path,
+                table_name=table_name,
+                cfg=cfg,
+                upstream_lineage=lineage,
+            )
+        )
+        assert len(
+            evaluation.load_result_table(
+                path,
+                table_name=table_name,
+                cfg=cfg,
+                upstream_lineage=lineage,
+                expected_rows=1,
+            )
+        ) == 1
+
+    assert len(paths) == 19
+    assert len(set(paths)) == 19
+    assert all(path.is_file() and manifest_path(path).is_file() for path in paths)
 
 
 def test_root_h5ad_round_trip_uses_additive_manifest(tmp_path, monkeypatch, synthetic_anndata_factory):
