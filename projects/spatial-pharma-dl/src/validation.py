@@ -461,6 +461,13 @@ def resolve_post_qc_preprocessing(
             requested=requested,
             guidance="Retain at least two genes after QC or revise the QC thresholds.",
         )
+    unchanged_axes = (
+        ("input_genes", "after_filter_cells_genes"),
+        ("after_filter_cells_spots", "after_filter_genes_spots"),
+        ("after_filter_genes_genes", "post_qc_genes"),
+    )
+    if any(counts[after] != counts[before] for before, after in unchanged_axes):
+        raise _preprocessing_input_error("fixed-axis stage counts")
     transitions = (
         ("input_spots", "after_filter_cells_spots"),
         ("after_filter_cells_spots", "after_filter_genes_spots"),

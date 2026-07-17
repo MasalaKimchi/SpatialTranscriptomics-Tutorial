@@ -19,6 +19,7 @@ import yaml
 from src import data
 from src.identity import IdentityValidationError
 from src.validation import (
+    ConfigValidationError,
     PreprocessingManifest,
     PreprocessingValidationError,
     finalize_preprocessing_resolution,
@@ -137,6 +138,20 @@ def test_nonviable_actual_hvgs_fail_before_pca(actual_hvgs: int) -> None:
     assert caught.value.reason_code == "insufficient_actual_hvgs"
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"after_filter_cells_genes": 9},
+        {"after_filter_genes_spots": 9},
+        {"post_qc_genes": 7},
+    ],
+)
+def test_resolver_rejects_impossible_cross_axis_stage_histories(overrides) -> None:
+    with pytest.raises(PreprocessingValidationError) as caught:
+        _resolve(**overrides)
+    assert caught.value.reason_code == "invalid_preprocessing_input"
+
+
 def test_resolution_is_canonical_and_returns_mutation_isolated_primitives() -> None:
     first = finalize_preprocessing_resolution(_resolve(), actual_hvgs=6)
     second = finalize_preprocessing_resolution(_resolve(), actual_hvgs=6)
@@ -235,10 +250,13 @@ def test_scanpy_orchestration_passes_finalized_values_once(monkeypatch, syntheti
 
 
 def test_config_and_identity_guard_before_scanpy_import_copy_or_seed(monkeypatch, synthetic_anndata_factory) -> None:
+    reached = {"scanpy_import": False, "copy": False, "seed": False}
+
     class CopyForbidden:
         obs_names = pd.Index(["spot_a", None], dtype=object)
 
         def copy(self):
+            reached["copy"] = True
             raise AssertionError("copy reached")
 
     monkeypatch.delitem(sys.modules, "scanpy", raising=False)
@@ -246,18 +264,26 @@ def test_config_and_identity_guard_before_scanpy_import_copy_or_seed(monkeypatch
 
     def guarded_import(name, *args, **kwargs):
         if name == "scanpy":
+            reached["scanpy_import"] = True
             raise AssertionError("scanpy import reached")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr("builtins.__import__", guarded_import)
-    monkeypatch.setattr(data.st, "set_seeds", lambda *_args: (_ for _ in ()).throw(AssertionError("seed reached")))
+    def forbidden_seed(*_args):
+        reached["seed"] = True
+        raise AssertionError("seed reached")
+
+    monkeypatch.setattr(data.st, "set_seeds", forbidden_seed)
 
     bad_cfg = _valid_config()
     bad_cfg["preprocessing"]["n_pcs"] = 0
-    with pytest.raises(Exception):
+    with pytest.raises(ConfigValidationError) as caught:
         data.preprocess_slide(synthetic_anndata_factory(), "slide_a", cfg=bad_cfg)
+    assert any(issue.path == "preprocessing.n_pcs" for issue in caught.value.issues)
+    assert reached == {"scanpy_import": False, "copy": False, "seed": False}
     with pytest.raises(IdentityValidationError):
         data.preprocess_slide(CopyForbidden(), "slide_a", cfg=_valid_config())
+    assert reached == {"scanpy_import": False, "copy": False, "seed": False}
 
 
 def test_preprocessing_metadata_h5ad_round_trip(tmp_path, monkeypatch, synthetic_anndata_factory) -> None:
@@ -325,6 +351,36 @@ def test_manifest_rejects_primitive_but_semantically_malformed_record() -> None:
     record = _record("slide_a")
     record["counts"]["actual_hvgs"] = True
     with pytest.raises(PreprocessingValidationError, match="malformed_preprocessing_manifest"):
+        PreprocessingManifest(slide_ids=["slide_a"], records=[record])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("after_filter_cells_genes", 9),
+        ("after_filter_genes_spots", 9),
+        ("post_qc_genes", 7),
+    ],
+)
+def test_manifest_rejects_impossible_cross_axis_stage_histories(
+    field, value
+) -> None:
+    record = _record("slide_a")
+    record["counts"][field] = value
+
+    with pytest.raises(
+        PreprocessingValidationError, match="malformed_preprocessing_manifest"
+    ):
+        PreprocessingManifest(slide_ids=["slide_a"], records=[record])
+
+
+def test_manifest_rejects_forged_stage_exclusion_history() -> None:
+    record = _record("slide_a")
+    record["exclusions"]["gene_filter"] += 1
+
+    with pytest.raises(
+        PreprocessingValidationError, match="malformed_preprocessing_manifest"
+    ):
         PreprocessingManifest(slide_ids=["slide_a"], records=[record])
 
 
