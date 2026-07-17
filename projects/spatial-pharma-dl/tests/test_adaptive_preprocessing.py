@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
+from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -347,10 +350,240 @@ def test_pipeline_manifest_failure_precedes_write_and_downstream(tmp_path, monke
         "_load_stages",
         lambda: SimpleNamespace(
             st=SimpleNamespace(set_seeds=lambda _seed: None),
-            build_labels_cohort=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("labels reached")),
+            build_labels_cohort=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("labels reached")
+            ),
+            build_patch_cohort=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("patches reached")
+            ),
+            run_and_save_benchmark=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("model reached")
+            ),
+            evaluate_fold=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("report reached")
+            ),
         ),
     )
     with pytest.raises(PreprocessingValidationError):
         runner.main()
     assert not (tmp_path / "preprocessing_manifest.json").exists()
     assert not (tmp_path / "cohort_manifest.json").exists()
+
+
+def _declared_scanpy_python(tmp_path: Path) -> Path:
+    """Return a working declared-environment interpreter or fail actionably."""
+    candidates = [Path(sys.executable)]
+    conda_root = Path(sys.executable).resolve().parents[1]
+    candidates.append(conda_root / "envs" / "spatial-tx" / "bin" / "python")
+    failures: list[str] = []
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "MPLCONFIGDIR": str(tmp_path / "matplotlib"),
+            "NUMBA_DISABLE_JIT": "1",
+            "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        }
+    )
+    for candidate in dict.fromkeys(candidates):
+        if not candidate.is_file():
+            failures.append(f"{candidate}: interpreter not found")
+            continue
+        probe = subprocess.run(
+            [str(candidate), "-c", "import scanpy; print(scanpy.__version__)"],
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+            timeout=120,
+        )
+        if probe.returncode == 0:
+            return candidate
+        detail = (probe.stderr or probe.stdout).strip().splitlines()
+        failures.append(
+            f"{candidate}: {detail[-1] if detail else 'Scanpy import failed'}"
+        )
+    pytest.fail(
+        "Real Scanpy is required for the fast scientific integration gate. "
+        "Activate/install the declared spatial-tx environment from environment.yml. "
+        + " | ".join(failures)
+    )
+
+
+def _run_real_scanpy_preprocessing(tmp_path: Path) -> Path:
+    interpreter = _declared_scanpy_python(tmp_path)
+    output_path = tmp_path / "slide_real_clustered.h5ad"
+    pharma_root = CONFIG_PATH.parent.parent
+    repository_root = pharma_root.parents[1]
+    script = r'''
+from pathlib import Path
+import sys
+
+import anndata as ad
+import numpy as np
+import pandas as pd
+import yaml
+import numba
+
+# The managed sandbox makes installed package sources non-cacheable to Numba.
+# Keep real vectorized execution while disabling only decorator disk caching.
+_vectorize = numba.vectorize
+def _sandbox_vectorize(*args, **kwargs):
+    kwargs["cache"] = False
+    return _vectorize(*args, **kwargs)
+numba.vectorize = _sandbox_vectorize
+
+pharma_root = Path(sys.argv[1])
+repository_root = Path(sys.argv[2])
+output_path = Path(sys.argv[3])
+sys.path[:0] = [str(pharma_root), str(repository_root)]
+
+from src.data import preprocess_slide
+
+rng = np.random.default_rng(903)
+genes = ["MT-CO1", "EPCAM", "COL1A1", "CD3D", "MS4A1", "VIM", "MKI67", "CXCL9"]
+counts = rng.poisson(4.0, size=(10, len(genes))).astype(np.int32) + 1
+obs_names = [f"slide_real_spot_{index:02d}" for index in range(len(counts))]
+adata = ad.AnnData(
+    X=counts,
+    obs=pd.DataFrame({"slide_id": "slide_real"}, index=obs_names),
+    var=pd.DataFrame(index=genes),
+)
+config_path = pharma_root / "configs" / "default.yaml"
+cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+cfg["preprocessing"].update(
+    min_counts=1,
+    min_cells=1,
+    max_pct_mito=100,
+    n_top_genes_hvg=100,
+    n_pcs=50,
+    n_neighbors=50,
+    n_pcs_neighbors=30,
+)
+result = preprocess_slide(adata, "slide_real", cfg=cfg, seed=903)
+# Older Scanpy records an optional null log base using an H5AD encoding that
+# the repository's newer reader cannot decode. Omit only that optional null.
+if result.uns.get("log1p", {}).get("base") is None:
+    result.uns["log1p"].pop("base", None)
+result.obs_names = pd.Index(result.obs_names.to_numpy(dtype=object), dtype=object)
+result.var_names = pd.Index(result.var_names.to_numpy(dtype=object), dtype=object)
+for column in ("slide_id", "clusters"):
+    result.obs[column] = result.obs[column].astype(object)
+raw = result.raw.to_adata()
+raw.obs_names = pd.Index(raw.obs_names.to_numpy(dtype=object), dtype=object)
+raw.var_names = pd.Index(raw.var_names.to_numpy(dtype=object), dtype=object)
+result.raw = raw
+result.write_h5ad(output_path)
+'''
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "MPLCONFIGDIR": str(tmp_path / "matplotlib"),
+            "NUMBA_DISABLE_JIT": "1",
+            "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        }
+    )
+    completed = subprocess.run(
+        [
+            str(interpreter),
+            "-c",
+            script,
+            str(pharma_root),
+            str(repository_root),
+            str(output_path),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=repository_root,
+        env=environment,
+        text=True,
+        timeout=180,
+    )
+    assert completed.returncode == 0, (
+        "Real Scanpy preprocessing failed in the declared spatial-tx environment. "
+        "Repair environment.yml compatibility before accepting this phase.\n"
+        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    )
+    assert output_path.is_file()
+    return output_path
+
+
+def test_real_scanpy_capped_preprocessing_round_trip_matches_run_provenance(
+    tmp_path, monkeypatch
+) -> None:
+    """Execute the scientific stack and compare both persisted provenance surfaces."""
+    path = _run_real_scanpy_preprocessing(tmp_path)
+    monkeypatch.setattr(data, "pharma_processed_dir", lambda: tmp_path)
+    restored = data.load_slide("slide_real")
+    record = restored.uns["spatial_pharma_preprocessing"]
+    resolved = record["resolved"]
+
+    assert resolved["hvg_call"] < record["requested"]["hvg"]
+    assert resolved["pca"] < record["requested"]["pca"]
+    assert resolved["neighbors"] < record["requested"]["neighbors"]
+    assert resolved["graph_pcs"] < record["requested"]["graph_pcs"]
+    assert restored.obsm["X_pca"].shape == (restored.n_obs, resolved["pca"])
+    assert restored.uns["neighbors"]["params"]["n_neighbors"] == resolved["neighbors"]
+    assert restored.uns["neighbors"]["params"]["n_pcs"] == resolved["graph_pcs"]
+    assert "counts" in restored.layers
+    assert restored.raw is not None
+    assert "pca" in restored.uns
+    assert "clusters" in restored.obs
+
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "load_slide", data.load_slide)
+    admitted = SimpleNamespace(slide_ids=("slide_real",))
+    first = runner._assemble_preprocessing_manifest(admitted)
+    second = runner._assemble_preprocessing_manifest(admitted)
+    manifest = first.to_dict()
+    assert manifest["slide_ids"] == ["slide_real"]
+    assert manifest["records"] == [record]
+    assert first.canonical_json == second.canonical_json
+    assert first.canonical_json.encode("utf-8") == second.canonical_json.encode("utf-8")
+    assert json.loads(restored.uns["spatial_pharma_preprocessing_canonical_json"]) == record
+    assert path == tmp_path / "slide_real_clustered.h5ad"
+
+
+def test_nonviable_preprocessing_stops_before_graph_save_or_downstream(
+    monkeypatch, synthetic_anndata_factory
+) -> None:
+    """Two retained spots cannot reach normalization, graph, or publication seams."""
+    calls: list[str] = []
+
+    def qc(adata, **_kwargs):
+        calls.append("qc")
+        adata.obs["pct_counts_mt"] = np.zeros(adata.n_obs)
+
+    def pass_through(_adata, **_kwargs):
+        calls.append("filter")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("nonviable preprocessing reached a downstream seam")
+
+    fake_scanpy = SimpleNamespace(
+        pp=SimpleNamespace(
+            calculate_qc_metrics=qc,
+            filter_cells=pass_through,
+            filter_genes=pass_through,
+            normalize_total=forbidden,
+            log1p=forbidden,
+            highly_variable_genes=forbidden,
+            scale=forbidden,
+            pca=forbidden,
+            neighbors=forbidden,
+        ),
+        tl=SimpleNamespace(umap=forbidden),
+    )
+    monkeypatch.setitem(sys.modules, "scanpy", fake_scanpy)
+    monkeypatch.setattr(data.st, "set_seeds", lambda _seed: None)
+    monkeypatch.setattr(data.st, "run_leiden", forbidden)
+    monkeypatch.setattr(data, "save_slide", forbidden)
+
+    with pytest.raises(
+        PreprocessingValidationError, match="insufficient_post_qc_spots"
+    ):
+        data.preprocess_slide(
+            synthetic_anndata_factory(n_spots=2, n_genes=8),
+            "slide_a",
+            cfg=_valid_config(),
+        )
+    assert calls == ["qc", "filter", "filter"]

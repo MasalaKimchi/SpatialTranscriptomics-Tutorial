@@ -531,7 +531,15 @@ def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
     assert seen["stain_ids"] == ["oncology_b", "oncology_a"]
     assert seen["benchmark_ids"] == ["oncology_b", "oncology_a"]
     manifest = json.loads((tmp_path / "cohort_manifest.json").read_text())
+    assert manifest["schema_version"] == "cohort-manifest-v1"
     assert [item["slide_id"] for item in manifest["included"]] == seen["label_ids"]
+    preprocessing_manifest = json.loads(
+        (tmp_path / "preprocessing_manifest.json").read_text()
+    )
+    assert preprocessing_manifest["schema_version"] == (
+        "spatial-pharma-preprocessing-manifest-v1"
+    )
+    assert preprocessing_manifest["slide_ids"] == seen["label_ids"]
 
 
 @pytest.mark.parametrize("helper", ["summary", "labels", "stain", "patches"])
