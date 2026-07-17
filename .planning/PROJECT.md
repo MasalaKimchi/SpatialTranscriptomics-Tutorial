@@ -18,6 +18,8 @@ Reported spatial and machine-learning results must be scientifically trustworthy
 - ✓ Repository-relative paths, deterministic NumPy/Python seeds, configurable experiments, and committed figure previews are established conventions — existing.
 - ✓ Fast CPU/offline verification now runs Ruff plus 58 fixture-backed unit, artifact, synthetic AnnData, model/fold, and notebook-structure checks; network and full-cohort tiers are explicit opt-ins — validated in Phase 1.
 - ✓ Experiment startup now aggregates configuration defects, admits cohorts fail-closed by default, records explicit partial-cohort outcomes, and rejects empty work at public scientific boundaries — validated in Phase 2.
+- ✓ Label, patch, CNN/RF, and foundation paths now enforce exact unique `(slide_id, spot_id)` identity with complete one-to-one metadata-order alignment and bounded hostile-safe diagnostics — validated in Phase 3.
+- ✓ Preprocessing now derives legal HVG/PCA/neighbor dimensions from observed post-QC and actual-HVG counts, records canonical AnnData/run provenance, and is covered by real Scanpy/H5AD evidence within a 263-test offline gate — validated in Phase 3.
 
 ### Active
 
@@ -25,7 +27,6 @@ Reported spatial and machine-learning results must be scientifically trustworthy
 - [ ] Normalize stains from each source slide into a shared cohort reference basis.
 - [ ] Replace pickle-backed patch cache metadata with safe serialization.
 - [ ] Load model checkpoints without enabling arbitrary pickle execution.
-- [ ] Enforce one-to-one, complete label/patch alignment with actionable errors.
 - [ ] Fingerprint caches against configuration, source data, and relevant code contracts.
 - [ ] Make cache and result writes atomic and validate completed artifacts.
 - [ ] Seed PyTorch, data loaders, workers, and deterministic backend policy centrally.
@@ -35,7 +36,6 @@ Reported spatial and machine-learning results must be scientifically trustworthy
 - [ ] Preserve fixed physical context at image borders and record patch-quality flags.
 - [ ] Validate Macenko inputs and numerical outputs with explicit fallback provenance.
 - [ ] Add confidence, abstention, and provenance to heuristic scientific labels.
-- [ ] Adapt preprocessing dimensions safely after QC and record resolved parameters.
 - [ ] Consolidate supported Python/dependency declarations and produce a reproducible environment contract.
 
 ### Out of Scope
@@ -67,7 +67,9 @@ The GSD codebase map identifies a linear notebook workflow at the repository roo
 | Use fine-grained GSD planning with automatic advancement | Keeps 20 changes reviewable while allowing autonomous execution | — Pending |
 | Build synthetic fixtures before expensive integration tests | Enables leakage and artifact-contract tests without downloads | ✓ Validated in Phase 1: strict offline tiers, deterministic fixtures, and 58 tests |
 | Treat cache/checkpoint safety as documented migrations | Secure formats may invalidate legacy artifacts and require regeneration | — Pending |
-| Preserve existing notebook and CLI surfaces | Reliability work should not become a user-facing redesign | ✓ Preserved through Phases 1-2 while tightening default validation and admission |
+| Preserve existing notebook and CLI surfaces | Reliability work should not become a user-facing redesign | ✓ Preserved through Phases 1-3 while tightening validation, identity, and preprocessing admission |
+| Treat `(slide_id, spot_id)` as the sole spot identity | Spot barcodes may repeat across slides and row order is not identity | ✓ Validated in Phase 3 across ordinary and foundation consumers |
+| Resolve scientific dimensions from observed retained data | Requested dimensions can become illegal after QC or actual HVG selection | ✓ Validated in Phase 3 with canonical provenance and real Scanpy/H5AD evidence |
 
 ## Evolution
 
@@ -87,4 +89,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-17 after Phase 2 verification*
+*Last updated: 2026-07-17 after Phase 3 verification*
