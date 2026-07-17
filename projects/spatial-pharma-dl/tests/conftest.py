@@ -501,3 +501,47 @@ def artifact_adversary_factory(
         }
 
     return build
+
+
+@pytest.fixture
+def artifact_contract_factory(tmp_path: Path) -> Callable[[], dict[str, Any]]:
+    """Build fresh byte generations and inert fault logs for artifact tests."""
+
+    def build() -> dict[str, Any]:
+        generations = {
+            "old": {
+                "payload": b"trusted-old-generation\n",
+                "schema": {"generation": "old", "encoding": "utf-8"},
+            },
+            "new": {
+                "payload": b"trusted-new-generation\n",
+                "schema": {"generation": "new", "encoding": "utf-8"},
+            },
+        }
+        malformed = {
+            "zero": b"",
+            "invalid_utf8": b"\xff",
+            "invalid_json": b'{"incomplete":',
+            "duplicate": b'{"schema_version":1,"schema_version":2}',
+            "oversized": b"{" + (b" " * 70_000) + b"}",
+        }
+        return {
+            "root": tmp_path,
+            "final_path": tmp_path / "artifact.bin",
+            "generations": generations,
+            "malformed": malformed,
+            "operation_log": [],
+            "faults": (
+                "write_payload",
+                "fsync_payload",
+                "write_manifest",
+                "fsync_manifest",
+                "validate",
+                "replace_payload",
+                "fsync_directory_first",
+                "replace_manifest",
+                "fsync_directory_final",
+            ),
+        }
+
+    return build
