@@ -52,6 +52,19 @@ def test_local_checkpoint_round_trip_requires_contract_before_decode(tmp_path, m
     assert payload["fold"] == 0
     assert calls == ["torch.load"]
 
+    original_decoder = models._read_trusted_local_checkpoint
+
+    def aba_decoder(snapshot):
+        held = path.with_name("held-checkpoint.pt")
+        path.rename(held)
+        path.write_bytes(b"unadmitted-checkpoint-bytes")
+        path.unlink()
+        held.rename(path)
+        return original_decoder(snapshot)
+
+    monkeypatch.setattr(models, "_read_trusted_local_checkpoint", aba_decoder)
+    assert models.load_local_checkpoint_payload(path, cfg=cfg)["fold"] == 0
+
     manifest_path(path).unlink()
     calls.clear()
     with pytest.raises(ArtifactValidationError, match="legacy_artifact"):

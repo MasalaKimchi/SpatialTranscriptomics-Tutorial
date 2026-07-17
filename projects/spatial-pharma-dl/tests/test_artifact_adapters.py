@@ -140,6 +140,21 @@ def test_trusted_local_patch_and_index_round_trip(
     pd.testing.assert_frame_equal(restored_meta, meta)
     assert manifest_path(path).is_file()
 
+    original_decoder = patches._read_trusted_local_patch_npz
+
+    def aba_decoder(snapshot, slide_id):
+        held = path.with_name("held-patch.npz")
+        path.rename(held)
+        path.write_bytes(b"unadmitted-patch-bytes")
+        path.unlink()
+        held.rename(path)
+        return original_decoder(snapshot, slide_id)
+
+    monkeypatch.setattr(patches, "_read_trusted_local_patch_npz", aba_decoder)
+    np.testing.assert_array_equal(
+        patches.load_patch_arrays("slide_a", cfg=cfg)[0], values
+    )
+
     index = meta[["slide_id", "spot_id"]].assign(
         cluster=["0", "0"],
         cluster_id=[0, 0],

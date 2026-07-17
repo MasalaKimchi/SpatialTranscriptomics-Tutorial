@@ -482,6 +482,18 @@ def _result_table_schema(frame: pd.DataFrame, table_name: str) -> dict[str, obje
     for column in set(columns) & {"slide_id", "val_slide", "held_out_slide", "task", "model", "selected_candidate"}:
         if any(type(value) is not str or not value for value in frame[column].tolist()):
             raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    identity_columns = {
+        "cohort_summary": ["slide_id"],
+        "training_history": ["fold", "val_slide", "epoch"],
+        "nested_loso_results": ["model", "task", "fold", "held_out_slide"],
+        "model_task_summary": ["model", "task"],
+    }[table_name]
+    if frame.duplicated(identity_columns).any():
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    if table_name in {"nested_loso_results", "model_task_summary"}:
+        bounded = [column for column in columns if "coverage" in column]
+        if any(((frame[column] < 0) | (frame[column] > 1)).any() for column in bounded):
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
     numeric_columns = [column for column in columns if pd.api.types.is_numeric_dtype(frame[column])]
     if numeric_columns and not np.isfinite(frame[numeric_columns].to_numpy(dtype=np.float64)).all():
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
@@ -628,6 +640,20 @@ def _cohort_manifest(value: dict[str, object]) -> CohortManifest:
     partitions = (*manifest.included, *manifest.skipped, *manifest.failed)
     if {item.slide_id for item in partitions} != set(configured_ids):
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+    for item in manifest.configured:
+        if item.status != "configured" or item.reason_code is not None or item.reason is not None:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+    for item in manifest.included:
+        if item.status != "included" or item.reason_code is not None or item.reason is not None:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+    for item in manifest.skipped:
+        if item.status != "skipped" or item.reason_code not in {
+            "source_load_failed", "source_not_attempted", "missing_processed_slide"
+        } or type(item.reason) is not str or not item.reason:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+    for item in manifest.failed:
+        if item.status != "failed" or item.reason_code != "source_load_failed" or type(item.reason) is not str or not item.reason:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
     return manifest
 
 
