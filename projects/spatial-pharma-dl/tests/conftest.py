@@ -239,10 +239,37 @@ def cohort_factory() -> Callable[..., dict[str, Any]]:
 @pytest.fixture
 def key_adversary_factory(
     cohort_factory: Callable[..., dict[str, Any]],
-) -> Callable[[], dict[str, dict[str, pd.DataFrame]]]:
+) -> Callable[[], dict[str, dict[str, Any]]]:
     """Build malformed key tables used by later alignment validation."""
 
-    def build() -> dict[str, dict[str, pd.DataFrame]]:
+    class HostileString(str):
+        """A string subclass whose data-model hooks must never be executed."""
+
+        def _raise(self, operation: str):
+            raise AssertionError(f"identity validation executed hostile {operation}")
+
+        def strip(self, *_args: object, **_kwargs: object):
+            return self._raise("strip")
+
+        def __repr__(self):
+            return self._raise("repr")
+
+        def __str__(self):
+            return self._raise("str")
+
+        def __hash__(self):
+            return self._raise("hash")
+
+        def __eq__(self, _other: object):
+            return self._raise("equality")
+
+        def __lt__(self, _other: object):
+            return self._raise("comparison")
+
+        def __iter__(self):
+            return self._raise("iteration")
+
+    def build() -> dict[str, dict[str, Any]]:
         valid = cohort_factory()
         labels = valid["labels"]
         patch_index = valid["patch_index"]
@@ -259,6 +286,36 @@ def key_adversary_factory(
         unmatched_patches.loc[0, "spot_id"] = "patch_only_spot"
         cross_slide = labels.copy(deep=True)
         cross_slide.loc[4, "spot_id"] = cross_slide.loc[0, "spot_id"]
+
+        shuffled_labels = labels.sample(frac=1.0, random_state=17).reset_index(drop=True)
+        shuffled_metadata = patch_index.sample(
+            frac=1.0, random_state=23
+        ).reset_index(drop=True)
+        missing_label_slide = labels.drop(columns="slide_id")
+        missing_metadata_spot = patch_index.drop(columns="spot_id")
+        blank_labels = labels.copy(deep=True)
+        blank_labels.loc[0, "spot_id"] = "   "
+        wrong_type_metadata = patch_index.copy(deep=True)
+        wrong_type_metadata["spot_id"] = wrong_type_metadata["spot_id"].astype(object)
+        wrong_type_metadata.loc[0, "spot_id"] = 17
+        hostile_labels = labels.copy(deep=True)
+        hostile_labels["spot_id"] = hostile_labels["spot_id"].astype(object)
+        hostile_labels.loc[0, "spot_id"] = HostileString("hostile")
+        hostile_metadata = patch_index.copy(deep=True)
+        hostile_metadata["slide_id"] = hostile_metadata["slide_id"].astype(object)
+        hostile_metadata.loc[0, "slide_id"] = HostileString("slide_a")
+        duplicate_metadata = patch_index.copy(deep=True)
+        duplicate_metadata.loc[1, ["slide_id", "spot_id"]] = (
+            duplicate_metadata.loc[0, ["slide_id", "spot_id"]].to_numpy()
+        )
+        wrong_slide_metadata = patch_index.loc[
+            patch_index["slide_id"] == "slide_a"
+        ].copy()
+        wrong_slide_metadata.loc[0, "slide_id"] = "slide_b"
+        reserved_labels = labels.copy(deep=True)
+        reserved_labels["_label_source_row"] = range(len(reserved_labels))
+        reserved_metadata = patch_index.copy(deep=True)
+        reserved_metadata["_patch_source_row"] = range(len(reserved_metadata))
 
         return {
             "null": {"labels": null_labels, "patch_index": patch_index.copy()},
@@ -277,6 +334,55 @@ def key_adversary_factory(
             "cross_slide": {
                 "labels": cross_slide,
                 "patch_index": patch_index.copy(),
+            },
+            "shuffled_complete": {
+                "labels": shuffled_labels,
+                "patch_index": shuffled_metadata,
+            },
+            "missing_label_slide": {
+                "labels": missing_label_slide,
+                "patch_index": patch_index.copy(),
+            },
+            "missing_metadata_spot": {
+                "labels": labels.copy(),
+                "patch_index": missing_metadata_spot,
+            },
+            "blank": {
+                "labels": blank_labels,
+                "patch_index": patch_index.copy(),
+            },
+            "wrong_type": {
+                "labels": labels.copy(),
+                "patch_index": wrong_type_metadata,
+            },
+            "hostile_label": {
+                "labels": hostile_labels,
+                "patch_index": patch_index.copy(),
+            },
+            "hostile_metadata": {
+                "labels": labels.copy(),
+                "patch_index": hostile_metadata,
+            },
+            "duplicate_metadata": {
+                "labels": labels.copy(),
+                "patch_index": duplicate_metadata,
+            },
+            "wrong_slide_metadata": {
+                "labels": labels.copy(),
+                "patch_index": wrong_slide_metadata,
+            },
+            "value_row_mismatch": {
+                "labels": labels.copy(),
+                "patch_index": patch_index.copy(),
+                "value_row_count": len(patch_index) - 1,
+            },
+            "reserved_label": {
+                "labels": reserved_labels,
+                "patch_index": patch_index.copy(),
+            },
+            "reserved_metadata": {
+                "labels": labels.copy(),
+                "patch_index": reserved_metadata,
             },
         }
 

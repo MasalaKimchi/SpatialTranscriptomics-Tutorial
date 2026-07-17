@@ -77,6 +77,18 @@ def test_all_key_and_fold_adversaries_are_constructed(
         "unmatched_label",
         "unmatched_patch",
         "cross_slide",
+        "shuffled_complete",
+        "missing_label_slide",
+        "missing_metadata_spot",
+        "blank",
+        "wrong_type",
+        "hostile_label",
+        "hostile_metadata",
+        "duplicate_metadata",
+        "wrong_slide_metadata",
+        "value_row_mismatch",
+        "reserved_label",
+        "reserved_metadata",
     }
     assert set(folds) == {
         "empty",
