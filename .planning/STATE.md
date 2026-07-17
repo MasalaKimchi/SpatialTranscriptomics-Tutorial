@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-07-17T04:31:29.998Z"
-last_activity: 2026-07-17 -- Completed Phase 1 Plan 02 representative offline evidence
+status: verifying
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-07-17T04:37:59.735Z"
+last_activity: 2026-07-17 -- Completed Phase 1 Plan 03 canonical verification workflow
 progress:
   total_phases: 10
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 10
 ---
 
 # Project State
@@ -25,33 +25,35 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 
 ## Current Position
 
-Phase: 1 (Offline Verification Harness) — EXECUTING
+Phase: 1 (Offline Verification Harness) — VERIFYING
 Plan: 3 of 3
-Status: Ready to execute
-Last activity: 2026-07-17 -- Completed Phase 1 Plan 02 representative offline evidence
+Status: Phase complete — ready for verification
+Last activity: 2026-07-17 -- Completed Phase 1 Plan 03 canonical verification workflow
 
-Progress: [███████░░░] 67%
+Progress: [█░░░░░░░░░] 10%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 2
+- Total plans completed: 3
 - Average duration: 7 min
-- Total execution time: 0.2 hours
+- Total execution time: 0.3 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 2 | 14 min | 7 min |
+| 01 | 3 | 20 min | 7 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 7 min, 7 min
-- Trend: Baseline established
+- Last 5 plans: 7 min, 7 min, 6 min
+- Trend: Stable
 
 *Updated after each plan completion*
+
+- Phase 01 Plan 03: 6 min, 2 tasks, 5 files
 
 ## Accumulated Context
 
@@ -66,6 +68,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 01]: Scientific fixtures are fresh fixed-seed factories isolated under pytest tmp_path. — Later phases need reproducible adversarial inputs without shared mutation or repository artifact writes.
 - [Phase 01]: Artifact and model evidence remains fixture-only or stubbed so later safety and scientific fixes retain their phase boundaries. — TEST-01 needs meaningful offline coverage without blessing unsafe readers or biased real training.
 - [Phase 01]: Notebook structural checks tolerate legacy missing cell IDs and never execute or rewrite notebooks. — The public teaching sequence and artifacts remain stable while fast validation detects malformed notebooks.
+- [Phase 01]: Fast verification runs Ruff before strict offline pytest and propagates the first failure. — One deterministic command keeps local and CI evidence identical and fail-fast.
+- [Phase 01]: Empty pytest selections are reported as non-evidence only for explicit opt-in tiers. — An unpopulated optional tier should remain visible without weakening required fast evidence.
+- [Phase 01]: Required CI is independent of dispatch-gated external evidence jobs and caches dependencies only. — Pull requests stay CPU/offline while scientific artifacts and model weights cannot enter the cache.
 
 ### Pending Todos
 
@@ -83,6 +88,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T04:31:29.995Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-07-17T04:37:48.597Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None

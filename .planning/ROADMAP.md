@@ -11,7 +11,7 @@ This milestone adds a thin reliability spine beneath the existing notebook-first
 - Integer phases (1, 2, 3): Planned milestone work.
 - Decimal phases (2.1, 2.2): Urgent insertions, if later required.
 
-- [ ] **Phase 1: Offline Verification Harness** - Establish representative, tiered, CPU/offline evidence for every later reliability change.
+- [x] **Phase 1: Offline Verification Harness** - Establish representative, tiered, CPU/offline evidence for every later reliability change. (completed 2026-07-17)
 - [ ] **Phase 2: Validated Run and Cohort Admission** - Reject invalid experiments and resolve cohort membership before expensive work.
 - [ ] **Phase 3: Identity and Adaptive Preprocessing** - Guarantee sample alignment and scientifically viable post-QC dimensions.
 - [ ] **Phase 4: Durable Artifact Contract** - Accept only fingerprint-matched, complete, schema-valid artifacts.
@@ -37,7 +37,7 @@ This milestone adds a thin reliability spine beneath the existing notebook-first
   3. Maintainers can distinguish fast synthetic evidence from explicit notebook-smoke, network, and full-cohort tiers in CI configuration and test output.
   4. Later phases can add regression evidence to the same tiers without introducing separate test conventions.
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 ### Phase 2: Validated Run and Cohort Admission
 
@@ -183,7 +183,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Offline Verification Harness | 2/3 | In Progress|  |
+| 1. Offline Verification Harness | 3/3 | Complete   | 2026-07-17 |
 | 2. Validated Run and Cohort Admission | 0/TBD | Not started | - |
 | 3. Identity and Adaptive Preprocessing | 0/TBD | Not started | - |
 | 4. Durable Artifact Contract | 0/TBD | Not started | - |
