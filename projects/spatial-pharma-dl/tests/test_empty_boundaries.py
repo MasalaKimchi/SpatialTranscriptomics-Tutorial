@@ -14,6 +14,7 @@ import yaml
 
 from src import benchmark, data, eval as evaluation, foundation, labels, patches, train
 from src import foundation_eval
+from src.identity import IdentityValidationError
 from src.validation import ConfigValidationError, StageValidationError, require_non_empty
 
 pytestmark = pytest.mark.offline
@@ -178,7 +179,7 @@ def test_patch_empty_coordinates_fail_before_image_or_stack(monkeypatch) -> None
 
     with pytest.raises(StageValidationError, match="patch_extraction") as caught:
         patches._extract_spot_patches(
-            SimpleNamespace(),
+            SimpleNamespace(obs_names=pd.Index([], dtype=object)),
             "slide_a",
             np.eye(2, 3),
             _patch_cfg(),
@@ -291,10 +292,13 @@ def test_align_zero_rows_fails_before_patch_indexing(monkeypatch) -> None:
         lambda *_args, **_kwargs: (patch_array, metadata),
     )
 
-    with pytest.raises(StageValidationError, match="patch_label_alignment") as caught:
+    with pytest.raises(IdentityValidationError, match="patch_label_alignment") as caught:
         train.load_slide_patches("slide_a", label_frame, cfg={})
 
-    assert caught.value.observed == 0
+    assert {issue.code for issue in caught.value.issues} == {
+        "label_only",
+        "metadata_only",
+    }
 
 
 def _fold_cfg() -> dict:

@@ -19,6 +19,7 @@ from . import bootstrap  # noqa: F401
 from utils import st_helpers as st
 
 from .data import load_config, pharma_processed_dir, safe_filename
+from .identity import validate_anndata_spot_identity
 from .validation import StageValidationError, require_non_empty
 
 
@@ -149,6 +150,7 @@ def _extract_spot_patches(
     cfg: dict[str, Any],
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Extract normalized, resized patches for all spots on a slide."""
+    validate_anndata_spot_identity(adata, slide_id, stage="patch_extraction")
     patch_cfg = cfg["patches"]
     min_patch = patch_cfg["min_patch_px"]
     out_size = patch_cfg["output_size"]

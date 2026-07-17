@@ -10,6 +10,7 @@ from . import bootstrap  # noqa: F401
 from utils import st_helpers as st
 
 from .data import load_config, load_slide, pharma_outputs_dir, tumor_type_for_slide
+from .identity import align_labels_with_metadata, validate_anndata_spot_identity
 from .validation import require_non_empty
 
 
@@ -137,6 +138,11 @@ def build_labels_for_slide(
         cfg = load_config()
     seed = seed if seed is not None else cfg.get("seed", st.SEED)
     adata = load_slide(sample_id)
+    validate_anndata_spot_identity(
+        adata,
+        sample_id,
+        stage="slide_label_generation",
+    )
     class_map = tme_class_to_id(cfg)
 
     markers = st.genes_present(
@@ -248,4 +254,9 @@ def build_labels_cohort(
 
 
 def align_labels_with_patches(labels: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
-    return labels.merge(meta, on=["slide_id", "spot_id"], how="inner")
+    """Align complete label and patch metadata tables in patch order."""
+    return align_labels_with_metadata(
+        labels,
+        meta,
+        stage="patch_label_alignment",
+    )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -12,6 +13,8 @@ from src.identity import (
     align_labels_with_metadata,
     validate_anndata_spot_identity,
 )
+from src import labels as label_module
+from src import patches as patch_module
 
 pytestmark = pytest.mark.offline
 
@@ -70,6 +73,14 @@ def test_wrong_slide_metadata_is_rejected(key_adversary_factory):
         _align(case, expected_slide_id="slide_a")
 
     assert "wrong_slide" in {issue.code for issue in caught.value.issues}
+
+
+def test_cross_slide_mismatch_is_distinguished(key_adversary_factory):
+    case = key_adversary_factory()["cross_slide"]
+    with pytest.raises(IdentityValidationError) as caught:
+        _align(case)
+
+    assert "cross_slide" in {issue.code for issue in caught.value.issues}
 
 
 def test_diagnostics_are_deterministic_and_bounded():
@@ -135,3 +146,58 @@ def test_anndata_identity_rejects_invalid_names_before_row_construction():
 
     with pytest.raises(IdentityValidationError, match="invalid_type"):
         validate_anndata_spot_identity(adata, "slide_a", stage="producer")
+
+
+def test_public_alignment_facade_preserves_dataframe_contract(
+    key_adversary_factory,
+):
+    case = key_adversary_factory()["shuffled_complete"]
+
+    aligned = label_module.align_labels_with_patches(
+        case["labels"], case["patch_index"]
+    )
+
+    assert isinstance(aligned, pd.DataFrame)
+    assert aligned["spot_id"].tolist() == case["patch_index"]["spot_id"].tolist()
+
+
+def test_label_producer_rejects_anndata_identity_before_scientific_work(monkeypatch):
+    invalid = SimpleNamespace(obs_names=pd.Index(["spot_a", None], dtype=object))
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("label scientific seam was reached")
+
+    fake_scanpy = SimpleNamespace(
+        tl=SimpleNamespace(rank_genes_groups=forbidden),
+        get=SimpleNamespace(rank_genes_groups_df=forbidden),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "scanpy", fake_scanpy)
+    monkeypatch.setattr(label_module, "load_slide", lambda _slide_id: invalid)
+    monkeypatch.setattr(label_module, "tme_class_to_id", forbidden)
+    monkeypatch.setattr(label_module, "marker_genes_for_slide", forbidden)
+    monkeypatch.setattr(label_module, "compute_module_scores", forbidden)
+    monkeypatch.setattr(label_module.st, "genes_present", forbidden)
+
+    with pytest.raises(IdentityValidationError, match="invalid_type"):
+        label_module.build_labels_for_slide("slide_a", cfg={"seed": 0})
+
+
+def test_patch_producer_rejects_anndata_identity_before_coordinates_or_stack(
+    monkeypatch,
+):
+    invalid = SimpleNamespace(obs_names=pd.Index(["spot_a", None], dtype=object))
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("patch scientific seam was reached")
+
+    monkeypatch.setattr(patch_module, "coords_hires", forbidden)
+    monkeypatch.setattr(patch_module.st, "get_image", forbidden)
+    monkeypatch.setattr(patch_module.np, "stack", forbidden)
+
+    with pytest.raises(IdentityValidationError, match="invalid_type"):
+        patch_module._extract_spot_patches(
+            invalid,
+            "slide_a",
+            np.eye(2, 3),
+            {"patches": {}},
+        )
