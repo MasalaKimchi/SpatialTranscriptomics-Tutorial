@@ -18,8 +18,8 @@ Exactly 20 high-priority updates are committed to this milestone.
 
 - [ ] **ART-01**: Patch arrays and metadata round-trip through a non-pickle format, and untrusted cache loading never enables NumPy object deserialization.
 - [ ] **ART-02**: Model checkpoints load weights with `weights_only=True` and validate separately stored metadata without executing pickle-backed Python objects.
-- [ ] **ART-03**: Processed-slide, patch, embedding, model, and report caches include a deterministic fingerprint of relevant configuration, input identity, and artifact schema, and stale fingerprints are rejected.
-- [ ] **ART-04**: Cache, model, table, and manifest writes use same-filesystem temporary files plus atomic replacement, and readers validate required keys, schemas, shapes, and completion metadata.
+- [x] **ART-03**: Processed-slide, patch, embedding, model, and report caches include a deterministic fingerprint of relevant configuration, input identity, and artifact schema, and stale fingerprints are rejected.
+- [x] **ART-04**: Cache, model, table, and manifest writes use same-filesystem temporary files plus atomic replacement, and readers validate required keys, schemas, shapes, and completion metadata.
 
 ### Input and Cohort Validation
 
@@ -79,8 +79,8 @@ Exactly 20 high-priority updates are committed to this milestone.
 | EVAL-04 | Phase 7 | Pending |
 | ART-01 | Phase 5 | Pending |
 | ART-02 | Phase 5 | Pending |
-| ART-03 | Phase 4 | Pending |
-| ART-04 | Phase 4 | Pending |
+| ART-03 | Phase 4 | Complete |
+| ART-04 | Phase 4 | Complete |
 | VAL-01 | Phase 2 | Complete |
 | VAL-02 | Phase 3 | Complete |
 | VAL-03 | Phase 2 | Complete |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 3 independently verified 20/20
-last_updated: "2026-07-17T08:42:41.621Z"
+status: executing
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-07-17T09:15:02.875Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 10
   completed_phases: 3
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 13
+  completed_plans: 11
   percent: 30
 ---
 
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 ## Current Position
 
 Phase: 4
-Plan: Not started
-Status: Ready for context, research, and planning
+Plan: 2 of 3 in current phase
+Status: Ready to execute
 Last activity: 2026-07-17
 
 Progress: [███░░░░░░░] 30%
@@ -64,6 +64,7 @@ Progress: [███░░░░░░░] 30%
 | Phase 03 P01 | 18min | 3 tasks | 9 files |
 | Phase 03 P02 | 20min | 3 tasks | 6 files |
 | Phase 03 P03 | 18min | 2 tasks | 3 files |
+| Phase 04 P01 | 16min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 03]: AnnData stores a canonical preprocessing JSON sibling. — Safe JSON restores exact built-in primitives after H5AD scalar decoding.
 - [Phase 03]: Preprocessing run provenance validates completely before publication. — Malformed admitted-slide metadata must reach no manifest or downstream scientific effect.
 - [Phase 03]: Real Scanpy remains mandatory fast evidence through the declared spatial-tx interpreter. — Missing scientific dependencies must fail actionably rather than skip or fall back to recorder-only evidence.
+- [Phase 04]: Artifact state is canonical JSON behind immutable records. — Fresh exact-built-in views prevent caller mutation while keeping the generic layer import-light.
+- [Phase 04]: Artifact kinds use explicit projection allowlists and contract versions. — Scientific lineage changes invalidate deterministically without presentation-only churn.
+- [Phase 04]: Temporary validation uses the final logical basename and exact reuse reader. — Validated sidecar bytes remain unchanged when the payload and manifest move to final names.
+- [Phase 04]: Checksums do not authenticate pickle-bearing formats. — Phase 5 remains responsible for removing unsafe patch and checkpoint deserialization.
 
 ### Pending Todos
 
@@ -115,6 +120,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T08:42:41.621Z
-Stopped at: Phase 3 independently verified 20/20
+Last session: 2026-07-17T09:14:56.767Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
