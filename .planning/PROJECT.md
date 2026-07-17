@@ -16,6 +16,7 @@ Reported spatial and machine-learning results must be scientifically trustworthy
 - ✓ Users can run a pharma extension with cohort preprocessing, label engineering, patch extraction, LOSO benchmarking, and foundation-model probes — existing.
 - ✓ The pharma package exposes lightweight imports and focused foundation-model tests pass without eagerly importing Scanpy — existing.
 - ✓ Repository-relative paths, deterministic NumPy/Python seeds, configurable experiments, and committed figure previews are established conventions — existing.
+- ✓ Fast CPU/offline verification now runs Ruff plus 58 fixture-backed unit, artifact, synthetic AnnData, model/fold, and notebook-structure checks; network and full-cohort tiers are explicit opt-ins — validated in Phase 1.
 
 ### Active
 
@@ -37,7 +38,6 @@ Reported spatial and machine-learning results must be scientifically trustworthy
 - [ ] Fail on missing configured slides unless partial-cohort mode is explicitly enabled.
 - [ ] Add confidence, abstention, and provenance to heuristic scientific labels.
 - [ ] Adapt preprocessing dimensions safely after QC and record resolved parameters.
-- [ ] Add fixture-backed unit, integration, notebook, and CI validation tiers.
 - [ ] Consolidate supported Python/dependency declarations and produce a reproducible environment contract.
 
 ### Out of Scope
@@ -67,7 +67,7 @@ The GSD codebase map identifies a linear notebook workflow at the repository roo
 |----------|-----------|---------|
 | Scope exactly the top 20 P0/P1 GSD findings | Matches the requested count and prioritizes scientific/security risk over polish | — Pending |
 | Use fine-grained GSD planning with automatic advancement | Keeps 20 changes reviewable while allowing autonomous execution | — Pending |
-| Build synthetic fixtures before expensive integration tests | Enables leakage and artifact-contract tests without downloads | — Pending |
+| Build synthetic fixtures before expensive integration tests | Enables leakage and artifact-contract tests without downloads | ✓ Validated in Phase 1: strict offline tiers, deterministic fixtures, and 58 tests |
 | Treat cache/checkpoint safety as documented migrations | Secure formats may invalidate legacy artifacts and require regeneration | — Pending |
 | Preserve existing notebook and CLI surfaces | Reliability work should not become a user-facing redesign | — Pending |
 
@@ -89,4 +89,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-17 after GSD initialization*
+*Last updated: 2026-07-17 after Phase 1 verification*
