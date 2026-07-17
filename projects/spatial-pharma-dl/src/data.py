@@ -64,6 +64,16 @@ def safe_filename(sample_id: str) -> str:
     return re.sub(r"[^\w\-]", "_", sample_id)
 
 
+def available_processed_slide_ids(sample_ids: list[str]) -> set[str]:
+    """Return cached slide IDs without creating or opening any path."""
+    base = st.project_root() / "data" / "processed" / "pharma"
+    return {
+        sample_id
+        for sample_id in sample_ids
+        if (base / f"{safe_filename(sample_id)}_clustered.h5ad").is_file()
+    }
+
+
 def _mito_prefix(adata) -> str:
     """Return 'mt-' for mouse or 'MT-' for human based on gene names."""
     if any(g.startswith("MT-") for g in adata.var_names[:500]):

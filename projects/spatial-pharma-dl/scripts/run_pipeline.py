@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -17,67 +18,132 @@ sys.path.insert(0, str(PHARMA))
 
 import src.bootstrap  # noqa: E402,F401
 
-import matplotlib  # noqa: E402
-
-matplotlib.use("Agg")
-
-from utils import st_helpers as st  # noqa: E402
-
-st.set_seeds()
-
-from src.benchmark import run_and_save_benchmark  # noqa: E402
 from src.data import (  # noqa: E402
+    available_processed_slide_ids,
     cohort_slide_ids,
-    cohort_summary,
     load_config,
     pharma_outputs_dir,
     preprocess_cohort,
 )
-from src.eval import evaluate_fold  # noqa: E402
-from src.labels import build_labels_cohort  # noqa: E402
-from src.patches import (  # noqa: E402
-    build_patch_cohort,
-    fit_reference_stain,
-    patch_cache_path,
-    save_patch_index,
-)
+from src.validation import admit_run, resolve_config  # noqa: E402
 
 
-def _need_patch_rebuild(cfg: dict, all_slides: list[str]) -> bool:
+def _load_stages() -> SimpleNamespace:
+    """Load scientific and model stages only after final admission succeeds."""
+    import matplotlib
+    import pandas as pd
+
+    matplotlib.use("Agg")
+
+    from src.benchmark import run_and_save_benchmark
+    from src.data import cohort_summary
+    from src.eval import evaluate_fold
+    from src.labels import build_labels_cohort
+    from src.patches import (
+        build_patch_cohort,
+        fit_reference_stain,
+        patch_cache_path,
+        save_patch_index,
+    )
+    from utils import st_helpers as st
+
+    return SimpleNamespace(
+        pd=pd,
+        st=st,
+        run_and_save_benchmark=run_and_save_benchmark,
+        cohort_summary=cohort_summary,
+        evaluate_fold=evaluate_fold,
+        build_labels_cohort=build_labels_cohort,
+        build_patch_cohort=build_patch_cohort,
+        fit_reference_stain=fit_reference_stain,
+        patch_cache_path=patch_cache_path,
+        save_patch_index=save_patch_index,
+    )
+
+
+def _need_patch_rebuild(
+    cfg: dict, all_slides: list[str], patch_cache_path
+) -> bool:
     if os.environ.get("PHARMA_FORCE_PATCHES"):
         return True
     return any(not patch_cache_path(sid, cfg).exists() for sid in all_slides)
+
+
+def _curate_sources(cfg: dict, slide_ids: list[str]):
+    """Attempt remote sources and finalize strict or partial admission once."""
+    allow_partial = cfg["cohort_policy"]["allow_partial"]
+    successful: list[str] = []
+    failures: dict[str, str] = {}
+    for slide_id in slide_ids:
+        try:
+            preprocess_cohort([slide_id], cfg=cfg)
+            successful.append(slide_id)
+        except Exception:
+            failures[slide_id] = "Source loading failed for the configured slide."
+            if not allow_partial:
+                return admit_run(cfg, failures=failures)
+    return admit_run(
+        cfg,
+        available_slide_ids=successful,
+        failures=failures,
+    )
 
 
 def main() -> None:
     cfg = load_config()
     if os.environ.get("PHARMA_FOUNDATION"):
         cfg["foundation"]["enabled"] = True
-    exp = cfg.get("experiment", "v2")
-    oncology = cfg["cohorts"]["oncology"]
-    all_slides = cohort_slide_ids(cfg)
-    train_only = os.environ.get("PHARMA_TRAIN_ONLY")
+    if os.environ.get("PHARMA_QUICK"):
+        cfg["training"]["epochs"] = 2
+        cfg["training"]["patience"] = 1
 
+    resolved = resolve_config(cfg)
+    cfg = resolved.to_dict()
+    configured_slides = cohort_slide_ids(cfg)
+    train_only = bool(os.environ.get("PHARMA_TRAIN_ONLY"))
+
+    exp = cfg.get("experiment", "v2")
     print("=" * 60)
     print(f"Experiment: {exp}")
     print("=" * 60)
 
-    if not train_only:
+    if train_only:
+        print("PHARMA_TRAIN_ONLY=1: skipping phase 1")
+        final_admitted = admit_run(
+            cfg,
+            available_slide_ids=available_processed_slide_ids(configured_slides),
+        )
+    else:
         print("Phase 1: Data curation")
-        preprocess_cohort(all_slides, cfg=cfg)
-        summary = cohort_summary(all_slides)
-        out = pharma_outputs_dir() / "cohort_summary.csv"
+        admit_run(cfg, available_slide_ids=None)  # provisional: never published
+        final_admitted = _curate_sources(cfg, configured_slides)
+
+    all_slides = list(final_admitted.slide_ids)
+    oncology = [
+        record.slide_id
+        for record in final_admitted.manifest.included
+        if record.cohort == "oncology"
+    ]
+    stages = _load_stages()
+    stages.st.set_seeds(cfg["seed"])
+
+    out_dir = pharma_outputs_dir()
+    manifest_path = out_dir / "cohort_manifest.json"
+    manifest_path.write_text(final_admitted.manifest.canonical_json, encoding="utf-8")
+
+    if not train_only:
+        summary = stages.cohort_summary(all_slides)
+        out = out_dir / "cohort_summary.csv"
         summary.to_csv(out, index=False)
         print(summary.to_string())
         print("Wrote", out)
-    else:
-        print("PHARMA_TRAIN_ONLY=1: skipping phase 1")
-
     print("Phase 2: Label engineering (harmonized TME + modules)")
-    labels = build_labels_cohort(all_slides, cfg=cfg)
+    labels = stages.build_labels_cohort(all_slides, cfg=cfg)
     print(f"Labels: {len(labels)} spots")
 
-    if not train_only or _need_patch_rebuild(cfg, all_slides):
+    if not train_only or _need_patch_rebuild(
+        cfg, all_slides, stages.patch_cache_path
+    ):
         print(
             "Phase 3: Patch dataset (context_scale=%s, version=%s)"
             % (
@@ -85,12 +151,12 @@ def main() -> None:
                 cfg["patches"].get("version", "v1"),
             )
         )
-        ref_stain = fit_reference_stain(oncology, cfg)
-        build_patch_cohort(all_slides, ref_stain=ref_stain, cfg=cfg)
+        ref_stain = stages.fit_reference_stain(oncology, cfg)
+        stages.build_patch_cohort(all_slides, ref_stain=ref_stain, cfg=cfg)
     else:
         print("Phase 3: using cached v2 patches")
 
-    idx_path = save_patch_index(labels)
+    idx_path = stages.save_patch_index(labels)
     print("Wrote", idx_path)
 
     benchmark_arms = "CNN + RF"
@@ -100,21 +166,19 @@ def main() -> None:
     breast_labels = labels[labels["slide_id"].isin(oncology)]
 
     if os.environ.get("PHARMA_QUICK"):
-        cfg["training"]["epochs"] = 2
-        cfg["training"]["patience"] = 1
         print("PHARMA_QUICK=1: epochs=2")
 
-    report_path, cnn_results = run_and_save_benchmark(oncology, breast_labels, cfg=cfg)
-    for r in cnn_results:
-        ev = evaluate_fold(r)
+    report_path, cnn_results = stages.run_and_save_benchmark(
+        oncology, breast_labels, cfg=cfg
+    )
+    for result in cnn_results:
+        ev = stages.evaluate_fold(result)
         print(
             f"  CNN fold {ev['fold']} {ev['val_slide'][:30]}: "
             f"bal_acc={ev['balanced_accuracy']:.3f} mean_r={ev['mean_pearson_r']:.3f}"
         )
 
-    import pandas as pd
-
-    report = pd.read_csv(report_path)
+    report = stages.pd.read_csv(report_path)
     for row in report.query("model != 'cnn'").itertuples():
         print(
             f"  {row.model:<17} fold {row.fold} {row.val_slide[:30]}: "
@@ -148,8 +212,8 @@ def main() -> None:
         summary["foundation_mean_pearson_r"] = float(
             foundation_rows["mean_pearson_r"].mean()
         )
-    summary_path = pharma_outputs_dir() / f"experiment_{exp}_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2))
+    summary_path = out_dir / f"experiment_{exp}_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print("Wrote", report_path)
     print("Wrote", summary_path)
     print("=" * 60)
