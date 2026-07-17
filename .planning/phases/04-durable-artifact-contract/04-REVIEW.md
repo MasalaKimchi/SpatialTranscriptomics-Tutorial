@@ -12,7 +12,7 @@ resolved_findings: 9
 
 # Phase 4 Code Review
 
-**Scope:** Second review-fix iteration through commits `5027032`, `6fcf68f`, and `b14e003`, including every WR-06R..WR-09 reproduction, the 19 retained production artifact adapters, their parent-lineage paths, and source/generated-notebook bypass inventory.
+**Scope:** Independent second review-fix re-review through commits `5027032`, `6fcf68f`, `b14e003`, and `8b95d96`, including every WR-06R..WR-09 reproduction, the 19 retained production artifact adapters, their parent-lineage paths, and source/generated-notebook bypass inventory.
 
 **Result:** Clean. WR-01 through WR-09 are closed with production-reader evidence and the full offline gate passes.
 
@@ -45,7 +45,8 @@ All three public result writers reject absent or empty lineage before directory 
 
 ## Verification Performed
 
-- Focused production adapter/static gate: **26 passed**.
+- Focused production adapter/static and original-finding regression gates: **26 passed**.
+- Public-writer boundary probes independently confirmed that overlapping cohort partitions and impossible metrics receive typed rejection with **zero filesystem side effects**.
 - Canonical `python scripts/verify.py fast`: Ruff passed and **400 offline tests passed**.
 - Test collection independently confirmed **400 tests**.
 - No network, model download, dataset download, or push was performed.
