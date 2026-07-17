@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-07-17T09:40:30.000Z"
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-07-17T09:56:05.000Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 10
   completed_phases: 3
   total_plans: 13
-  completed_plans: 12
+  completed_plans: 13
   percent: 30
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 
 Phase: 4
 Plan: 3 of 3 in current phase
-Status: Ready to execute
+Status: Implementation complete; ready for phase review and verification
 Last activity: 2026-07-17
 
 Progress: [███░░░░░░░] 30%
@@ -36,9 +36,9 @@ Progress: [███░░░░░░░] 30%
 
 **Velocity:**
 
-- Total plans completed: 11
-- Average duration: 11 min
-- Total execution time: 1.8 hours
+- Total plans completed: 13
+- Average duration: 13 min
+- Total execution time: 2.5 hours
 
 **By Phase:**
 
@@ -66,6 +66,7 @@ Progress: [███░░░░░░░] 30%
 | Phase 03 P03 | 18min | 2 tasks | 3 files |
 | Phase 04 P01 | 16min | 3 tasks | 3 files |
 | Phase 04 P02 | 13min | 3 tasks | 13 files |
+| Phase 04 P03 | 27min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 04]: Scientific readers validate manifest-declared schemas after generic byte admission. — A valid checksum cannot bless wrong axes, rows, dtypes, identity, dimensions, or provenance.
 - [Phase 04]: Legacy object patch archives are admitted only as local-writer output. — Generic admission precedes decoding, and Phase 5 remains the required safe-format migration boundary.
 - [Phase 04]: Semantic corruption is not an automatic cache miss. — Acquisition may rebuild missing, legacy, or stale artifacts while checksum-valid reader failures remain visible.
+- [Phase 04]: Checkpoint compatibility remains local-writer-only until Phase 5. — Contract admission and checksums establish integrity and lineage, not hostile pickle authenticity.
+- [Phase 04]: Every retained runner and generated-notebook scientific table uses a named adapter. — Static inventory rejects new raw-I/O or filename-only reuse seams without broad directory exemptions.
+- [Phase 04]: Sidecar expectation reads share the bounded regular-file manifest path. — Reconstructing an expected fingerprint cannot bypass sidecar size, symlink, or generation checks.
 
 ### Pending Todos
 
@@ -125,6 +129,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T09:40:30.000Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-07-17T09:56:05.000Z
+Stopped at: Completed 04-03-PLAN.md
 Resume file: None
