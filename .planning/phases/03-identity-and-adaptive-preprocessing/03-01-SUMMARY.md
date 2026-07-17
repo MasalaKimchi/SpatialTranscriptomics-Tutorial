@@ -72,7 +72,7 @@ Each task was committed atomically:
 2. **Task 2: Implement metadata-order alignment and guard producers** - `21e00e2` (feat)
 3. **Task 3: Route patch and foundation consumers through one contract** - `37c3707` (feat)
 
-## Verification Evidence
+## Test Evidence
 
 - Task 1 focused adversarial gate: 12 passed; scoped Ruff passed.
 - Task 2 focused producer/alignment gate: 4 passed; affected AnnData/empty-boundary gate: 13 passed; scoped Ruff passed.
@@ -97,7 +97,7 @@ Each task was committed atomically:
 
 - Invalid key objects are identified only by row ordinal, canonical column name, and inert exact type label; their representation, hashing, comparison, coercion, string, strip, or iteration hooks are never used.
 - Valid labels from other cohort slides remain admissible context for an expected-slide call and are excluded only after full-table validation; they are not classified as extras.
-- A cache hit with incomplete or mismatched identity is a visible validation failure, preventing silent subset reuse and avoiding an expensive fallback that could conceal artifact corruption.
+- A cache hit with partial or mismatched identity is a visible validation failure, preventing silent subset reuse and avoiding an expensive fallback that could conceal artifact corruption.
 
 ## Deviations from Plan
 
