@@ -73,32 +73,32 @@ Exactly 20 high-priority updates are committed to this milestone.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVAL-01 | TBD | Pending |
-| EVAL-02 | TBD | Pending |
-| EVAL-03 | TBD | Pending |
-| EVAL-04 | TBD | Pending |
-| ART-01 | TBD | Pending |
-| ART-02 | TBD | Pending |
-| ART-03 | TBD | Pending |
-| ART-04 | TBD | Pending |
-| VAL-01 | TBD | Pending |
-| VAL-02 | TBD | Pending |
-| VAL-03 | TBD | Pending |
-| VAL-04 | TBD | Pending |
-| VAL-05 | TBD | Pending |
-| REPRO-01 | TBD | Pending |
-| IMG-01 | TBD | Pending |
-| IMG-02 | TBD | Pending |
-| IMG-03 | TBD | Pending |
-| LABEL-01 | TBD | Pending |
-| TEST-01 | TBD | Pending |
-| ENV-01 | TBD | Pending |
+| EVAL-01 | Phase 7 | Pending |
+| EVAL-02 | Phase 6 | Pending |
+| EVAL-03 | Phase 7 | Pending |
+| EVAL-04 | Phase 7 | Pending |
+| ART-01 | Phase 5 | Pending |
+| ART-02 | Phase 5 | Pending |
+| ART-03 | Phase 4 | Pending |
+| ART-04 | Phase 4 | Pending |
+| VAL-01 | Phase 2 | Pending |
+| VAL-02 | Phase 3 | Pending |
+| VAL-03 | Phase 2 | Pending |
+| VAL-04 | Phase 2 | Pending |
+| VAL-05 | Phase 3 | Pending |
+| REPRO-01 | Phase 6 | Pending |
+| IMG-01 | Phase 8 | Pending |
+| IMG-02 | Phase 8 | Pending |
+| IMG-03 | Phase 8 | Pending |
+| LABEL-01 | Phase 9 | Pending |
+| TEST-01 | Phase 1 | Pending |
+| ENV-01 | Phase 10 | Pending |
 
 **Coverage:**
 - v1 requirements: 20 total
-- Mapped to phases: 0
-- Unmapped: 20 ⚠️
+- Mapped to phases: 20
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-07-17*
-*Last updated: 2026-07-17 after automatic GSD requirements definition*
+*Last updated: 2026-07-17 after roadmap traceability mapping*
