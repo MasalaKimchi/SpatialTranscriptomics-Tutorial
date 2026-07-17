@@ -67,7 +67,7 @@ This milestone adds a thin reliability spine beneath the existing notebook-first
   3. Post-QC spot and gene counts either resolve deterministic legal HVG, PCA, and neighbor dimensions or fail as scientifically nonviable.
   4. Requested and resolved preprocessing parameters, input counts, exclusions, and reason codes remain visible in AnnData and run provenance.
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 ### Phase 4: Durable Artifact Contract
 
@@ -185,7 +185,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 |-------|----------------|--------|-----------|
 | 1. Offline Verification Harness | 3/3 | Complete    | 2026-07-17 |
 | 2. Validated Run and Cohort Admission | 4/4 | Complete    | 2026-07-17 |
-| 3. Identity and Adaptive Preprocessing | 1/3 | In Progress|  |
+| 3. Identity and Adaptive Preprocessing | 2/3 | In Progress|  |
 | 4. Durable Artifact Contract | 0/TBD | Not started | - |
 | 5. Safe Cache and Checkpoint Formats | 0/TBD | Not started | - |
 | 6. Reproducible Fold Admission | 0/TBD | Not started | - |
