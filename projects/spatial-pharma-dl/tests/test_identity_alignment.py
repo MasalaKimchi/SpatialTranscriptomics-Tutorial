@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from src.identity import (
     IdentityValidationError,
@@ -364,4 +365,254 @@ def test_foundation_cache_miss_checks_extracted_cardinality_before_write(
             labels.drop(columns=["_label_source_row", "_patch_source_row"]),
             cfg=_foundation_test_config(),
             encoder_bundle=(object(), "cpu", spec),
+        )
+
+
+class _LocalFoundationEncoder(torch.nn.Module):
+    """Deterministic local encoder with the registered Kaiko output width."""
+
+    def forward(self, batch: torch.Tensor) -> torch.Tensor:
+        signal = batch.mean(dim=(1, 2, 3), keepdim=False).unsqueeze(1)
+        return signal.repeat(1, FOUNDATION_MODELS["kaiko_vits16"].embedding_dim)
+
+
+def test_ordinary_and_foundation_cache_outcomes_share_exact_alignment(
+    monkeypatch, tmp_path
+):
+    """One shuffled table must pair identically through every image consumer."""
+    metadata = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a", "slide_a"],
+            "spot_id": ["shared", "p0", "p1"],
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "slide_id": ["slide_b", "slide_a", "slide_a", "slide_a"],
+            "spot_id": ["shared", "p1", "shared", "p0"],
+            "target": [900, 11, 10, 12],
+            "provenance": ["other-slide", "label-p1", "label-shared", "label-p0"],
+        }
+    )
+    patches = np.stack(
+        [np.full((3, 4, 4), value, dtype=np.float32) for value in (0.1, 0.2, 0.3)]
+    )
+    monkeypatch.setattr(
+        train_module,
+        "load_patch_arrays",
+        lambda *_args, **_kwargs: (patches, metadata.copy()),
+    )
+    config = _foundation_test_config()
+    cache_path = tmp_path / "cross_arm.npz"
+    monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
+    monkeypatch.setattr(
+        foundation_module, "_embedding_cache_path", lambda *_args: cache_path
+    )
+
+    ordinary_values, ordinary_labels = train_module.load_slide_patches(
+        "slide_a", labels, cfg=config
+    )
+    miss_values, miss_labels = foundation_module.load_or_extract_slide_embeddings(
+        "slide_a",
+        labels,
+        cfg=config,
+        encoder_bundle=(
+            _LocalFoundationEncoder(),
+            torch.device("cpu"),
+            FOUNDATION_MODELS["kaiko_vits16"],
+        ),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("cache hit attempted patch or encoder work")
+
+    monkeypatch.setattr(foundation_module, "load_slide_patches", forbidden)
+    monkeypatch.setattr(foundation_module, "load_frozen_encoder", forbidden)
+    hit_values, hit_labels = foundation_module.load_or_extract_slide_embeddings(
+        "slide_a", labels, cfg=config
+    )
+
+    expected_pairs = [
+        ("slide_a", "shared", 10, "label-shared"),
+        ("slide_a", "p0", 12, "label-p0"),
+        ("slide_a", "p1", 11, "label-p1"),
+    ]
+    for aligned in (ordinary_labels, miss_labels, hit_labels):
+        assert list(
+            aligned[["slide_id", "spot_id", "target", "provenance"]].itertuples(
+                index=False, name=None
+            )
+        ) == expected_pairs
+        assert aligned["_patch_source_row"].tolist() == [0, 1, 2]
+        assert aligned["_label_source_row"].tolist() == [2, 3, 1]
+    np.testing.assert_array_equal(ordinary_values, patches)
+    np.testing.assert_array_equal(hit_values, miss_values)
+    assert cache_path.is_file()
+
+
+class _HostileConsumerString(str):
+    def _fail(self, operation):
+        raise AssertionError(f"consumer executed hostile {operation}")
+
+    def strip(self, *_args, **_kwargs):
+        return self._fail("strip")
+
+    def __hash__(self):
+        return self._fail("hash")
+
+    def __eq__(self, _other):
+        return self._fail("equality")
+
+    def __repr__(self):
+        return self._fail("repr")
+
+
+def _consumer_adversary(defect: str) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    labels = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a"],
+            "spot_id": ["p0", "p1"],
+            "target": [0, 1],
+        }
+    )
+    metadata = labels[["slide_id", "spot_id"]].copy()
+    value_rows = 2
+    if defect == "null":
+        labels.loc[0, "spot_id"] = None
+    elif defect == "blank":
+        labels.loc[0, "spot_id"] = "   "
+    elif defect == "hostile":
+        labels["spot_id"] = labels["spot_id"].astype(object)
+        labels.loc[0, "spot_id"] = _HostileConsumerString("p0")
+    elif defect == "duplicate":
+        labels.loc[1, "spot_id"] = "p0"
+    elif defect == "label_only":
+        labels.loc[0, "spot_id"] = "label-only"
+    elif defect == "metadata_only":
+        metadata.loc[0, "spot_id"] = "metadata-only"
+    elif defect == "cross_slide":
+        labels.loc[0, "slide_id"] = "slide_b"
+    elif defect == "wrong_slide":
+        metadata.loc[0, "slide_id"] = "slide_b"
+    elif defect == "row_count":
+        value_rows = 1
+    else:  # pragma: no cover - test parameter invariant
+        raise AssertionError(defect)
+    return labels, metadata, value_rows
+
+
+@pytest.mark.parametrize("consumer", ["ordinary", "foundation_miss"])
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "null",
+        "blank",
+        "hostile",
+        "duplicate",
+        "label_only",
+        "metadata_only",
+        "cross_slide",
+        "wrong_slide",
+        "row_count",
+    ],
+)
+def test_public_consumers_guard_identity_before_merge_index_encoder_or_write(
+    monkeypatch, tmp_path, consumer, defect
+):
+    labels, metadata, value_rows = _consumer_adversary(defect)
+    patches = np.zeros((value_rows, 3, 4, 4), dtype=np.float32)
+    monkeypatch.setattr(
+        train_module,
+        "load_patch_arrays",
+        lambda *_args, **_kwargs: (patches, metadata),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("post-admission consumer seam was reached")
+
+    monkeypatch.setattr(pd.DataFrame, "merge", forbidden)
+    if consumer == "ordinary":
+        def call():
+            return train_module.load_slide_patches("slide_a", labels, cfg={})
+    else:
+        cache_path = tmp_path / f"{defect}.npz"
+        monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
+        monkeypatch.setattr(
+            foundation_module, "_embedding_cache_path", lambda *_args: cache_path
+        )
+        monkeypatch.setattr(foundation_module, "load_frozen_encoder", forbidden)
+        monkeypatch.setattr(foundation_module.np, "savez_compressed", forbidden)
+        def call():
+            return foundation_module.load_or_extract_slide_embeddings(
+                "slide_a",
+                labels,
+                cfg=_foundation_test_config(),
+                encoder_bundle=(
+                    _LocalFoundationEncoder(),
+                    torch.device("cpu"),
+                    FOUNDATION_MODELS["kaiko_vits16"],
+                ),
+            )
+
+    with pytest.raises(IdentityValidationError):
+        call()
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["null", "blank", "hostile", "duplicate", "label_only", "cross_slide"],
+)
+def test_foundation_cache_hit_guards_labels_before_merge_or_encoder(
+    monkeypatch, tmp_path, defect
+):
+    labels, metadata, _ = _consumer_adversary(defect)
+    cache_path = tmp_path / f"hit_{defect}.npz"
+    np.savez_compressed(
+        cache_path,
+        embeddings=np.zeros((2, 3), dtype=np.float32),
+        spot_ids=metadata["spot_id"].to_numpy(dtype=np.str_),
+    )
+    monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
+    monkeypatch.setattr(
+        foundation_module, "_embedding_cache_path", lambda *_args: cache_path
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("cache-hit post-admission seam was reached")
+
+    monkeypatch.setattr(pd.DataFrame, "merge", forbidden)
+    monkeypatch.setattr(foundation_module, "load_slide_patches", forbidden)
+    monkeypatch.setattr(foundation_module, "load_frozen_encoder", forbidden)
+
+    with pytest.raises(IdentityValidationError):
+        foundation_module.load_or_extract_slide_embeddings(
+            "slide_a", labels, cfg=_foundation_test_config()
+        )
+
+
+def test_foundation_cache_hit_rejects_value_row_count_before_merge(
+    monkeypatch, tmp_path
+):
+    labels, metadata, _ = _consumer_adversary("row_count")
+    cache_path = tmp_path / "hit_row_count.npz"
+    np.savez_compressed(
+        cache_path,
+        embeddings=np.zeros((1, 3), dtype=np.float32),
+        spot_ids=metadata["spot_id"].to_numpy(dtype=np.str_),
+    )
+    monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
+    monkeypatch.setattr(
+        foundation_module, "_embedding_cache_path", lambda *_args: cache_path
+    )
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "merge",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("merge was reached")
+        ),
+    )
+
+    with pytest.raises(IdentityValidationError, match="cardinality_mismatch"):
+        foundation_module.load_or_extract_slide_embeddings(
+            "slide_a", labels, cfg=_foundation_test_config()
         )
