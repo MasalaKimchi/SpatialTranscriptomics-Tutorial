@@ -568,7 +568,7 @@ def test_downstream_helpers_propagate_first_missing_admitted_member(
 
     calls: list[str] = []
 
-    def missing_first(slide_id: str, *_args):
+    def missing_first(slide_id: str, *_args, **_kwargs):
         calls.append(slide_id)
         if slide_id == "missing":
             raise FileNotFoundError("admitted slide disappeared")
