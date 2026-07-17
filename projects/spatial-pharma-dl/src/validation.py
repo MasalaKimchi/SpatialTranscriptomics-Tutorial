@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,6 +98,21 @@ class ConfigValidationError(PharmaValidationError):
 class CohortAdmissionError(PharmaValidationError):
     """Raised when a configured cohort cannot be admitted safely."""
 
+    def __init__(self, manifest: CohortManifest, message: str | None = None):
+        self.manifest = manifest
+        unavailable = tuple(
+            record.slide_id for record in (*manifest.skipped, *manifest.failed)
+        )
+        self.unavailable_slide_ids = tuple(dict.fromkeys(unavailable))
+        if message is None:
+            rendered = ", ".join(self.unavailable_slide_ids) or "none"
+            message = (
+                "Cohort admission failed; unavailable configured slides: "
+                f"{rendered}. Correct the listed inputs or explicitly enable "
+                "cohort_policy.allow_partial."
+            )
+        super().__init__(message)
+
 
 class StageValidationError(PharmaValidationError):
     """Raised when an empty or undersized stage input is rejected."""
@@ -115,6 +130,77 @@ class ResolvedConfig:
         if not isinstance(value, dict):  # pragma: no cover - constructor invariant
             raise TypeError("Resolved configuration root must be a JSON object.")
         return value
+
+
+@dataclass(frozen=True, slots=True)
+class SlideAdmission:
+    """One configured slide's deterministic admission outcome."""
+
+    slide_id: str
+    cohort: str
+    status: str
+    reason_code: str | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CohortManifest:
+    """Deterministic evidence for one cohort admission decision."""
+
+    schema_version: str
+    allow_partial: bool
+    configured: tuple[SlideAdmission, ...]
+    included: tuple[SlideAdmission, ...]
+    skipped: tuple[SlideAdmission, ...]
+    failed: tuple[SlideAdmission, ...]
+
+    @property
+    def canonical_json(self) -> str:
+        """Return stable JSON containing only manifest primitives."""
+        return json.dumps(
+            {
+                "schema_version": self.schema_version,
+                "allow_partial": self.allow_partial,
+                "configured": [_admission_dict(item) for item in self.configured],
+                "included": [_admission_dict(item) for item in self.included],
+                "skipped": [_admission_dict(item) for item in self.skipped],
+                "failed": [_admission_dict(item) for item in self.failed],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a fresh mutable JSON tree on every call."""
+        value = json.loads(self.canonical_json)
+        if not isinstance(value, dict):  # pragma: no cover - constructor invariant
+            raise TypeError("Cohort manifest root must be a JSON object.")
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class AdmittedRun:
+    """Immutable resolved configuration and its admitted cohort."""
+
+    config: ResolvedConfig
+    manifest: CohortManifest
+
+    @property
+    def slide_ids(self) -> tuple[str, ...]:
+        """Return admitted slide IDs in configuration order."""
+        return tuple(record.slide_id for record in self.manifest.included)
+
+
+def _admission_dict(record: SlideAdmission) -> dict[str, str | None]:
+    return {
+        "slide_id": record.slide_id,
+        "cohort": record.cohort,
+        "status": record.status,
+        "reason_code": record.reason_code,
+        "reason": record.reason,
+    }
 
 
 class _Issues:
@@ -621,3 +707,86 @@ def resolve_config(raw: Mapping[str, Any] | None) -> ResolvedConfig:
         allow_nan=False,
     )
     return ResolvedConfig(canonical_json)
+
+
+def admit_run(
+    cfg: Mapping[str, Any],
+    *,
+    available_slide_ids: Collection[str] | None = None,
+    failures: Mapping[str, str] | None = None,
+) -> AdmittedRun:
+    """Resolve and admit one ordered cohort without filesystem side effects.
+
+    ``None`` availability means remote availability is not known yet. A supplied
+    collection is treated as a complete local preflight result.
+    """
+    resolved = resolve_config(cfg)
+    normalized = resolved.to_dict()
+    allow_partial = normalized["cohort_policy"]["allow_partial"]
+    available = None if available_slide_ids is None else set(available_slide_ids)
+    failure_reasons = dict(failures or {})
+
+    configured: list[SlideAdmission] = []
+    included: list[SlideAdmission] = []
+    skipped: list[SlideAdmission] = []
+    failed: list[SlideAdmission] = []
+
+    for cohort in ("oncology", "external", "benchmark"):
+        for slide_id in normalized["cohorts"][cohort]:
+            configured.append(SlideAdmission(slide_id, cohort, "configured"))
+            if slide_id in failure_reasons:
+                reason = failure_reasons[slide_id]
+                failed.append(
+                    SlideAdmission(
+                        slide_id,
+                        cohort,
+                        "failed",
+                        "source_load_failed",
+                        reason,
+                    )
+                )
+                skipped.append(
+                    SlideAdmission(
+                        slide_id,
+                        cohort,
+                        "skipped",
+                        "source_load_failed",
+                        "Source loading failed; correct the source or rerun with a usable slide.",
+                    )
+                )
+            elif available is not None and slide_id not in available:
+                skipped.append(
+                    SlideAdmission(
+                        slide_id,
+                        cohort,
+                        "skipped",
+                        "missing_processed_slide",
+                        "Create the processed slide cache before running cache-backed stages.",
+                    )
+                )
+            else:
+                included.append(SlideAdmission(slide_id, cohort, "included"))
+
+    manifest = CohortManifest(
+        schema_version="cohort-manifest-v1",
+        allow_partial=allow_partial,
+        configured=tuple(configured),
+        included=tuple(included),
+        skipped=tuple(skipped),
+        failed=tuple(failed),
+    )
+    if (skipped or failed) and not allow_partial:
+        raise CohortAdmissionError(manifest)
+    if not included:
+        raise CohortAdmissionError(
+            manifest,
+            "Cohort admission failed: no usable configured slides remain.",
+        )
+    admitted_oncology = sum(item.cohort == "oncology" for item in included)
+    if normalized["cohorts"]["oncology"] and admitted_oncology < 2:
+        raise CohortAdmissionError(
+            manifest,
+            "Cohort admission failed: the oncology LOSO benchmark requires at "
+            "least two admitted oncology slides.",
+        )
+    return AdmittedRun(resolved, manifest)
