@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-07-17T05:13:44.045Z"
-last_activity: 2026-07-17 -- Phase 2 planning complete
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-07-17T05:49:08.062Z"
+last_activity: 2026-07-17
 progress:
   total_phases: 10
   completed_phases: 1
   total_plans: 6
-  completed_plans: 3
+  completed_plans: 4
   percent: 10
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-17)
 
 **Core value:** Reported spatial and machine-learning results must be scientifically trustworthy, reproducible, and produced from validated artifacts without hidden data leakage.
-**Current focus:** Phase 1 — Offline Verification Harness
+**Current focus:** Phase 2 — Validated Run and Cohort Admission
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
+Phase: 2 (Validated Run and Cohort Admission) — EXECUTING
+Plan: 2 of 3
 Status: Ready to execute
-Last activity: 2026-07-17 -- Phase 2 planning complete
+Last activity: 2026-07-17
 
 Progress: [█░░░░░░░░░] 10%
 
@@ -56,6 +56,8 @@ Progress: [█░░░░░░░░░] 10%
 
 - Phase 01 Plan 03: 6 min, 2 tasks, 5 files
 
+| Phase 02 P01 | 6 min | 2 tasks | 4 files |
+
 ## Accumulated Context
 
 ### Decisions
@@ -72,6 +74,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 01]: Fast verification runs Ruff before strict offline pytest and propagates the first failure. — One deterministic command keeps local and CI evidence identical and fail-fast.
 - [Phase 01]: Empty pytest selections are reported as non-evidence only for explicit opt-in tiers. — An unpopulated optional tier should remain visible without weakening required fast evidence.
 - [Phase 01]: Required CI is independent of dispatch-gated external evidence jobs and caches dependencies only. — Pull requests stay CPU/offline while scientific artifacts and model weights cannot enter the cache.
+- [Phase 02]: Configuration resolution uses explicit standard-library validators. — Invalid startup must fail before scientific and model libraries load.
+- [Phase 02]: Only production-optional fields receive resolver defaults. — Required scientific sections must remain observable as missing schema defects.
+- [Phase 02]: load_config returns a fresh plain dictionary decoded from canonical JSON. — Existing notebook and runner mutation remains compatible while admitted state stays immutable.
 
 ### Pending Todos
 
@@ -89,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T04:37:48.597Z
-Stopped at: Completed 01-03-PLAN.md
+Last session: 2026-07-17T05:49:08.060Z
+Stopped at: Completed 02-01-PLAN.md
 Resume file: None
