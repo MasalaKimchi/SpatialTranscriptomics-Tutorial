@@ -135,7 +135,8 @@ def patch_features(patch: np.ndarray) -> dict[str, float]:
 
 
 def patch_cache_path(slide_id: str, cfg: dict[str, Any] | None = None) -> Path:
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     version = cfg["patches"].get("version", "v1")
     return pharma_processed_dir() / f"{safe_filename(slide_id)}_patches_{version}.npz"
 
@@ -183,7 +184,9 @@ def extract_all_patches_for_slide(
     cfg: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Return (N, 3, H, W) float32 tensor array and metadata DataFrame."""
-    return _extract_spot_patches(adata, slide_id, ref_stain, cfg or load_config())
+    if cfg is None:
+        cfg = load_config()
+    return _extract_spot_patches(adata, slide_id, ref_stain, cfg)
 
 
 def fit_reference_stain(
@@ -192,14 +195,12 @@ def fit_reference_stain(
     """Fit Macenko reference stain matrix from first available slide."""
     from .data import load_slide
 
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     for sid in sample_ids:
-        try:
-            adata = load_slide(sid)
-            img = st.get_image(adata, "hires")
-            return stain_matrix_macenko(img)
-        except FileNotFoundError:
-            continue
+        adata = load_slide(sid)
+        img = st.get_image(adata, "hires")
+        return stain_matrix_macenko(img)
     raise FileNotFoundError("No processed slides found for stain reference.")
 
 
@@ -234,15 +235,12 @@ def build_patch_cohort(
     """Build patches for all slides; return reference stain matrix."""
     from .data import load_slide
 
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     if ref_stain is None:
         ref_stain = fit_reference_stain(sample_ids, cfg)
     for sid in sample_ids:
-        try:
-            adata = load_slide(sid)
-        except FileNotFoundError:
-            print(f"Skipping {sid} (not preprocessed)")
-            continue
+        adata = load_slide(sid)
         patches, meta = extract_all_patches_for_slide(adata, sid, ref_stain, cfg)
         save_patch_arrays(sid, patches, meta, cfg=cfg)
         print(f"Saved {len(patches)} patches for {sid}")

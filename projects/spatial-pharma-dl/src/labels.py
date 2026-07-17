@@ -24,13 +24,15 @@ DOMAIN_KEYWORDS = {
 
 
 def tme_class_names(cfg: dict[str, Any] | None = None) -> list[str]:
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     return list(cfg["labels"]["tme_classes"])
 
 
 def harmonize_tme_class(domain_name: str, cfg: dict[str, Any] | None = None) -> str:
     """Map slide-local domain_name to a global cross-slide TME class."""
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     allowed = set(tme_class_names(cfg))
     if domain_name in allowed:
         return domain_name
@@ -44,7 +46,8 @@ def tme_class_to_id(cfg: dict[str, Any] | None = None) -> dict[str, int]:
 def marker_genes_for_slide(
     sample_id: str, cfg: dict[str, Any] | None = None
 ) -> list[str]:
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     ttype = tumor_type_for_slide(sample_id)
     return cfg["marker_genes"].get(ttype, cfg["marker_genes"]["breast"])
 
@@ -52,7 +55,8 @@ def marker_genes_for_slide(
 def compute_module_scores(adata, cfg: dict[str, Any] | None = None) -> list[str]:
     import scanpy as sc
 
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     created = []
     for name, genes in cfg["gene_modules"].items():
         present = st.genes_present(adata, genes, verbose=False)
@@ -90,7 +94,8 @@ def regression_columns(
     labels: pd.DataFrame, cfg: dict[str, Any] | None = None
 ) -> list[str]:
     """Return regression target columns per config (modules, genes, or both)."""
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     mode = cfg["labels"].get("regression_targets", "modules")
     mods = module_columns(labels)
     genes = gene_columns(labels)
@@ -104,7 +109,8 @@ def regression_columns(
 
 
 def classification_column(cfg: dict[str, Any] | None = None) -> str:
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     return cfg["labels"]["classification_col"]
 
 
@@ -115,7 +121,8 @@ def build_labels_for_slide(
 ) -> pd.DataFrame:
     import scanpy as sc
 
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     seed = seed if seed is not None else cfg.get("seed", st.SEED)
     adata = load_slide(sample_id)
     class_map = tme_class_to_id(cfg)
@@ -163,17 +170,14 @@ def build_labels_for_slide(
 def build_labels_cohort(
     sample_ids: list[str], cfg: dict[str, Any] | None = None
 ) -> pd.DataFrame:
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     out_dir = pharma_outputs_dir()
     frames = []
     domain_rows = []
 
     for sid in sample_ids:
-        try:
-            labels = build_labels_for_slide(sid, cfg)
-        except FileNotFoundError:
-            print(f"Skipping labels for {sid} (slide not preprocessed)")
-            continue
+        labels = build_labels_for_slide(sid, cfg)
         path = out_dir / f"labels_{sid.replace(' ', '_')}.parquet"
         labels.to_parquet(path, index=False)
         frames.append(labels)

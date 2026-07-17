@@ -90,7 +90,8 @@ def preprocess_slide(
     """Run tutorial-equivalent QC + clustering pipeline on one slide."""
     import scanpy as sc
 
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
     prep = cfg["preprocessing"]
     seed = seed if seed is not None else cfg.get("seed", st.SEED)
     st.set_seeds(seed)
@@ -162,8 +163,10 @@ def preprocess_cohort(
     force: bool = False,
 ) -> dict[str, Path]:
     """Download and preprocess all slides in sample_ids."""
-    cfg = cfg or load_config()
-    sample_ids = sample_ids or cohort_slide_ids(cfg)
+    if cfg is None:
+        cfg = load_config()
+    if sample_ids is None:
+        sample_ids = cohort_slide_ids(cfg)
     paths = {}
     for sid in sample_ids:
         out = pharma_processed_dir() / f"{safe_filename(sid)}_clustered.h5ad"
@@ -183,13 +186,11 @@ def preprocess_cohort(
 
 def cohort_summary(sample_ids: list[str] | None = None) -> pd.DataFrame:
     """Build summary table for processed slides."""
-    sample_ids = sample_ids or cohort_slide_ids()
+    if sample_ids is None:
+        sample_ids = cohort_slide_ids()
     rows = []
     for sid in sample_ids:
-        try:
-            adata = load_slide(sid)
-        except FileNotFoundError:
-            continue
+        adata = load_slide(sid)
         rows.append(
             {
                 "slide_id": sid,

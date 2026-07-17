@@ -297,3 +297,64 @@ def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
     assert seen["benchmark_ids"] == ["oncology_b", "oncology_a"]
     manifest = json.loads((tmp_path / "cohort_manifest.json").read_text())
     assert [item["slide_id"] for item in manifest["included"]] == seen["label_ids"]
+
+
+@pytest.mark.parametrize("helper", ["summary", "labels", "stain", "patches"])
+def test_downstream_helpers_propagate_first_missing_admitted_member(
+    helper: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from src import data, labels, patches
+
+    calls: list[str] = []
+
+    def missing_first(slide_id: str, *_args):
+        calls.append(slide_id)
+        if slide_id == "missing":
+            raise FileNotFoundError("admitted slide disappeared")
+        raise AssertionError("later member must not be processed")
+
+    monkeypatch.setattr(data, "load_slide", missing_first)
+    monkeypatch.setattr(labels, "pharma_outputs_dir", lambda: tmp_path)
+    monkeypatch.setattr(labels, "build_labels_for_slide", missing_first)
+
+    cfg = _config()
+    with pytest.raises(FileNotFoundError, match="admitted slide disappeared"):
+        if helper == "summary":
+            data.cohort_summary(["missing", "later"])
+        elif helper == "labels":
+            labels.build_labels_cohort(["missing", "later"], cfg)
+        elif helper == "stain":
+            patches.fit_reference_stain(["missing", "later"], cfg)
+        else:
+            patches.build_patch_cohort(
+                ["missing", "later"],
+                ref_stain=object(),
+                cfg=cfg,
+            )
+
+    assert calls == ["missing"]
+    output = capsys.readouterr().out
+    assert "Skipping" not in output
+    assert "Saved" not in output
+
+
+def test_explicit_empty_values_are_not_replaced_by_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import data, labels, patches
+
+    def forbidden_default(*_args, **_kwargs):
+        raise AssertionError("explicit empty value reloaded defaults")
+
+    monkeypatch.setattr(data, "load_config", forbidden_default)
+    monkeypatch.setattr(labels, "load_config", forbidden_default)
+    monkeypatch.setattr(patches, "load_config", forbidden_default)
+
+    assert data.preprocess_cohort([], cfg={}) == {}
+    assert data.cohort_summary([]).empty
+    assert labels.tme_class_names({"labels": {"tme_classes": []}}) == []
+    marker = object()
+    assert patches.build_patch_cohort([], ref_stain=marker, cfg={}) is marker
