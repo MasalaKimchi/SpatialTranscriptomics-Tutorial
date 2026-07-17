@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-07-17T05:49:08.062Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-07-17T06:02:23.468Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 10
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
   percent: 10
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 ## Current Position
 
 Phase: 2 (Validated Run and Cohort Admission) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-07-17
 
@@ -57,6 +57,7 @@ Progress: [█░░░░░░░░░] 10%
 - Phase 01 Plan 03: 6 min, 2 tasks, 5 files
 
 | Phase 02 P01 | 6 min | 2 tasks | 4 files |
+| Phase 02 P02 | 7min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: Configuration resolution uses explicit standard-library validators. — Invalid startup must fail before scientific and model libraries load.
 - [Phase 02]: Only production-optional fields receive resolver defaults. — Required scientific sections must remain observable as missing schema defects.
 - [Phase 02]: load_config returns a fresh plain dictionary decoded from canonical JSON. — Existing notebook and runner mutation remains compatible while admitted state stays immutable.
+- [Phase 02]: Remote admission remains provisional until complete source outcomes are known. — Only final admission may publish the cohort manifest or release downstream stages.
+- [Phase 02]: Admission is the sole partial-cohort policy for downstream helpers. — Data, label, stain, patch, and benchmark stages consume one ordered admitted sequence or fail visibly.
 
 ### Pending Todos
 
@@ -94,6 +97,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T05:49:08.060Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-07-17T06:02:08.835Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
