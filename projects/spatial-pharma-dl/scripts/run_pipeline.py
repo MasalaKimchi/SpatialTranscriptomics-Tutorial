@@ -50,6 +50,7 @@ def _load_stages() -> SimpleNamespace:
         build_patch_cohort,
         fit_reference_stain,
         patch_cache_path,
+        patch_reuse_status,
         save_patch_index,
     )
     from utils import st_helpers as st
@@ -64,16 +65,15 @@ def _load_stages() -> SimpleNamespace:
         build_patch_cohort=build_patch_cohort,
         fit_reference_stain=fit_reference_stain,
         patch_cache_path=patch_cache_path,
+        patch_reuse_status=patch_reuse_status,
         save_patch_index=save_patch_index,
     )
 
 
-def _need_patch_rebuild(
-    cfg: dict, all_slides: list[str], patch_cache_path
-) -> bool:
+def _need_patch_rebuild(cfg: dict, all_slides: list[str], patch_reuse_status) -> bool:
     if os.environ.get("PHARMA_FORCE_PATCHES"):
         return True
-    return any(not patch_cache_path(sid, cfg).exists() for sid in all_slides)
+    return any(not patch_reuse_status(sid, cfg).reusable for sid in all_slides)
 
 
 def _curate_sources(cfg: dict, slide_ids: list[str]):
@@ -177,7 +177,7 @@ def main() -> None:
     print(f"Labels: {len(labels)} spots")
 
     if not train_only or _need_patch_rebuild(
-        cfg, all_slides, stages.patch_cache_path
+        cfg, all_slides, stages.patch_reuse_status
     ):
         print(
             "Phase 3: Patch dataset (context_scale=%s, version=%s)"
@@ -191,7 +191,7 @@ def main() -> None:
     else:
         print("Phase 3: using cached v2 patches")
 
-    idx_path = stages.save_patch_index(labels)
+    idx_path = stages.save_patch_index(labels, cfg=cfg)
     print("Wrote", idx_path)
 
     benchmark_arms = "CNN + RF"

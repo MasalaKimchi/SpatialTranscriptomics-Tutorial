@@ -32,6 +32,7 @@ from utils.artifacts import (
     ARTIFACT_CONTRACT_VERSIONS,
     ArtifactValidationError,
     admit_artifact,
+    artifact_reuse_status,
     build_fingerprint,
     publish_artifact,
 )
@@ -382,6 +383,19 @@ def load_patch_arrays(
             "payload_schema_mismatch", artifact_kind="patch", basename=path.name
         )
     return value
+
+
+def patch_reuse_status(slide_id: str, cfg: dict[str, Any] | None = None):
+    """Return a contract-aware cache decision without creating directories."""
+    resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    path = patch_cache_path(slide_id, resolved)
+    return artifact_reuse_status(
+        path,
+        expected_kind="patch",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        expected_fingerprint=_patch_fingerprint(slide_id, resolved),
+        reader=lambda candidate: _read_trusted_local_patch_npz(candidate, slide_id),
+    )
 
 
 def build_patch_cohort(
