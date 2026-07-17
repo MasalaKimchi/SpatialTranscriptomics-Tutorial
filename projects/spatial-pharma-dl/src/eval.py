@@ -25,7 +25,7 @@ from .labels import classification_column, regression_columns
 from .models import get_gradcam_layer
 from .patches import patch_features
 from .transforms import imagenet_normalize
-from .validation import StageValidationError, require_non_empty
+from .validation import StageValidationError, require_non_empty, resolve_config
 
 
 @torch.no_grad()
@@ -265,7 +265,10 @@ def save_benchmark_report(
     path: Path | None = None,
     cfg: dict[str, Any] | None = None,
 ) -> Path:
-    cfg = cfg or load_config()
+    if cfg is None:
+        cfg = load_config()
+    else:
+        cfg = resolve_config(cfg).to_dict()
     if path is None:
         exp = cfg.get("experiment", "v2")
         path = pharma_outputs_dir() / f"benchmark_report_{exp}.csv"

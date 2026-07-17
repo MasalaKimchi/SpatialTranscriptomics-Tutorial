@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import copy
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from src import benchmark, data, eval as evaluation, foundation, labels, patches, train
 from src import foundation_eval
-from src.validation import StageValidationError, require_non_empty
+from src.validation import ConfigValidationError, StageValidationError, require_non_empty
 
 pytestmark = pytest.mark.offline
 
@@ -28,6 +32,11 @@ def _patch_cfg() -> dict:
             "per_slide_stain_norm": False,
         }
     }
+
+
+def _complete_cfg() -> dict:
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+    return yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
 
 def test_data_stage_error_contract_exposes_stable_primitive_evidence() -> None:
@@ -458,6 +467,125 @@ def test_foundation_loso_empty_inputs_fail_before_encoder_or_cache(monkeypatch) 
         foundation.run_foundation_loso(
             ["slide_a", "slide_b"], pd.DataFrame(), cfg={}
         )
+
+
+@pytest.mark.parametrize("cfg", [{}, {"foundation": {}}])
+@pytest.mark.parametrize(
+    "helper",
+    [
+        "foundation_config",
+        "load_frozen_encoder",
+        "load_or_extract_slide_embeddings",
+        "save_benchmark_report",
+    ],
+)
+def test_explicit_invalid_config_fails_before_foundation_or_report_seams(
+    cfg, helper, monkeypatch, tmp_path
+) -> None:
+    labels_frame = pd.DataFrame()
+    monkeypatch.setattr(foundation, "load_config", _forbidden)
+    monkeypatch.setattr(foundation, "_foundation_model_spec_resolved", _forbidden)
+    monkeypatch.setattr(foundation, "_embedding_cache_path", _forbidden)
+    monkeypatch.setattr(foundation, "pharma_processed_dir", _forbidden)
+    monkeypatch.setattr(foundation, "resolve_device", _forbidden)
+    monkeypatch.setattr(foundation, "load_slide_patches", _forbidden)
+    monkeypatch.setattr(foundation, "extract_frozen_embeddings", _forbidden)
+    monkeypatch.setattr(foundation.np, "load", _forbidden)
+    monkeypatch.setattr(foundation.np, "savez_compressed", _forbidden)
+    monkeypatch.setattr(evaluation, "load_config", _forbidden)
+    monkeypatch.setattr(evaluation, "pharma_outputs_dir", _forbidden)
+    monkeypatch.setattr(evaluation.pd, "DataFrame", _forbidden)
+
+    with pytest.raises(ConfigValidationError):
+        if helper == "foundation_config":
+            foundation.foundation_config(cfg)
+        elif helper == "load_frozen_encoder":
+            foundation.load_frozen_encoder(cfg)
+        elif helper == "load_or_extract_slide_embeddings":
+            foundation.load_or_extract_slide_embeddings(
+                "slide_a", labels_frame, cfg=cfg
+            )
+        else:
+            evaluation.save_benchmark_report(
+                [], path=tmp_path / "must-not-exist.csv", cfg=cfg
+            )
+
+    assert not (tmp_path / "must-not-exist.csv").exists()
+
+
+def test_foundation_and_report_valid_configs_preserve_existing_behavior(
+    monkeypatch, tmp_path
+) -> None:
+    cfg = _complete_cfg()
+    default_calls = 0
+
+    def tracked_default() -> dict:
+        nonlocal default_calls
+        default_calls += 1
+        return copy.deepcopy(cfg)
+
+    monkeypatch.setattr(foundation, "load_config", tracked_default)
+    assert foundation.foundation_config() == cfg["foundation"]
+    assert default_calls == 1
+
+    monkeypatch.setattr(foundation, "load_config", _forbidden)
+    assert foundation.foundation_config(cfg) == cfg["foundation"]
+
+    created: list[tuple[tuple, dict]] = []
+
+    def create_model(*args, **kwargs):
+        created.append((args, kwargs))
+        return foundation.torch.nn.Identity()
+
+    monkeypatch.setitem(sys.modules, "timm", SimpleNamespace(create_model=create_model))
+    model, device, spec = foundation.load_frozen_encoder(cfg, device="cpu")
+    assert isinstance(model, foundation.torch.nn.Identity)
+    assert str(device) == "cpu"
+    assert spec is foundation.FOUNDATION_MODELS["kaiko_vits16"]
+    assert created[0][0][0].startswith("hf_hub:")
+
+    no_cache_cfg = copy.deepcopy(cfg)
+    no_cache_cfg["foundation"]["cache"] = False
+    labels_frame = pd.DataFrame(
+        {"slide_id": ["slide_a"], "spot_id": ["spot_a"], "tme_class_id": [0]}
+    )
+    monkeypatch.setattr(
+        foundation,
+        "_embedding_cache_path",
+        lambda *_args, **_kwargs: tmp_path / "unused-cache.npz",
+    )
+    monkeypatch.setattr(
+        foundation,
+        "load_slide_patches",
+        lambda *_args, **_kwargs: (
+            np.ones((1, 3, 8, 8), dtype=np.float32),
+            labels_frame,
+        ),
+    )
+    monkeypatch.setattr(
+        foundation,
+        "extract_frozen_embeddings",
+        lambda *_args, **_kwargs: np.ones((1, spec.embedding_dim), dtype=np.float32),
+    )
+    embeddings, aligned = foundation.load_or_extract_slide_embeddings(
+        "slide_a",
+        labels_frame,
+        cfg=no_cache_cfg,
+        encoder_bundle=(model, device, spec),
+    )
+    assert embeddings.shape == (1, spec.embedding_dim)
+    assert aligned.equals(labels_frame)
+    assert not (tmp_path / "unused-cache.npz").exists()
+
+    report_cfg = copy.deepcopy(cfg)
+    report_cfg["experiment"] = "explicit_valid"
+    monkeypatch.setattr(evaluation, "load_config", _forbidden)
+    monkeypatch.setattr(evaluation, "pharma_outputs_dir", lambda: tmp_path)
+    report = evaluation.save_benchmark_report(
+        [{"fold": 0}], cfg=report_cfg
+    )
+    assert report.name == "benchmark_report_explicit_valid.csv"
+    assert pd.read_csv(report)["experiment"].tolist() == ["explicit_valid"]
 
 
 def test_foundation_empty_slide_embeddings_fail_before_probe(monkeypatch) -> None:

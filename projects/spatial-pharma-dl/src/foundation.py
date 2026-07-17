@@ -23,7 +23,7 @@ from .device import device_label, resolve_device
 from .eval import classification_metrics, regression_metrics
 from .labels import classification_column, regression_columns
 from .train import _maybe_subsample, load_slide_patches, loso_folds
-from .validation import StageValidationError, require_non_empty
+from .validation import StageValidationError, require_non_empty, resolve_config
 
 
 @dataclass(frozen=True)
@@ -72,15 +72,26 @@ class _TransformersCLSEncoder(torch.nn.Module):
         return self.model(pixel_values=pixel_values).last_hidden_state[:, 0, :]
 
 
+def _resolved_config_arg(cfg: dict[str, Any] | None) -> dict[str, Any]:
+    """Resolve supplied config while reserving default loading for ``None``."""
+    if cfg is None:
+        return load_config()
+    return resolve_config(cfg).to_dict()
+
+
+def _foundation_config_resolved(cfg: dict[str, Any]) -> dict[str, Any]:
+    return cfg["foundation"]
+
+
 def foundation_config(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    cfg = cfg or load_config()
-    return cfg.get("foundation", {})
+    resolved = _resolved_config_arg(cfg)
+    return _foundation_config_resolved(resolved)
 
 
-def foundation_model_spec(
-    cfg: dict[str, Any] | None = None,
+def _foundation_model_spec_resolved(
+    cfg: dict[str, Any],
 ) -> tuple[str, FoundationModelSpec]:
-    fm_cfg = foundation_config(cfg)
+    fm_cfg = _foundation_config_resolved(cfg)
     name = fm_cfg.get("model", "kaiko_vits16")
     if name not in FOUNDATION_MODELS:
         raise ValueError(
@@ -89,14 +100,23 @@ def foundation_model_spec(
     return name, FOUNDATION_MODELS[name]
 
 
+def foundation_model_spec(
+    cfg: dict[str, Any] | None = None,
+) -> tuple[str, FoundationModelSpec]:
+    resolved = _resolved_config_arg(cfg)
+    return _foundation_model_spec_resolved(resolved)
+
+
 def load_frozen_encoder(
     cfg: dict[str, Any] | None = None,
     device: str | torch.device | None = None,
 ) -> tuple[torch.nn.Module, torch.device, FoundationModelSpec]:
     """Download/load a pathology encoder and freeze all of its parameters."""
-    cfg = cfg or load_config()
-    name, spec = foundation_model_spec(cfg)
-    dev = resolve_device(device or foundation_config(cfg).get("device", "auto"))
+    cfg = _resolved_config_arg(cfg)
+    name, spec = _foundation_model_spec_resolved(cfg)
+    dev = resolve_device(
+        device or _foundation_config_resolved(cfg).get("device", "auto")
+    )
     print(
         f"  Loading frozen encoder: {name} ({spec.repo_id}) | "
         f"device: {device_label(dev)}"
@@ -177,7 +197,7 @@ def extract_frozen_embeddings(
 
 
 def _embedding_cache_path(slide_id: str, cfg: dict[str, Any]) -> Path:
-    model_name, _ = foundation_model_spec(cfg)
+    model_name, _ = _foundation_model_spec_resolved(cfg)
     patch_version = cfg.get("patches", {}).get("version", "v1")
     cache_dir = pharma_processed_dir() / "foundation_embeddings" / model_name
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -192,9 +212,9 @@ def load_or_extract_slide_embeddings(
     | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Return spot-aligned embeddings, reusing a validated per-slide cache."""
-    cfg = cfg or load_config()
+    cfg = _resolved_config_arg(cfg)
     cache_path = _embedding_cache_path(slide_id, cfg)
-    use_cache = bool(foundation_config(cfg).get("cache", True))
+    use_cache = bool(_foundation_config_resolved(cfg).get("cache", True))
 
     if use_cache and cache_path.exists():
         with np.load(cache_path, allow_pickle=False) as cached:
@@ -227,13 +247,14 @@ def load_or_extract_slide_embeddings(
     if encoder_bundle is None:
         encoder_bundle = load_frozen_encoder(cfg)
     model, dev, spec = encoder_bundle
-    batch_size = int(foundation_config(cfg).get("batch_size", 64))
+    batch_size = int(_foundation_config_resolved(cfg).get("batch_size", 64))
     embeddings = extract_frozen_embeddings(
         patches, model, spec, dev, batch_size=batch_size
     )
     if embeddings.shape[1] != spec.embedding_dim:
         raise ValueError(
-            f"{foundation_model_spec(cfg)[0]} returned {embeddings.shape[1]} features; "
+            f"{_foundation_model_spec_resolved(cfg)[0]} returned "
+            f"{embeddings.shape[1]} features; "
             f"expected {spec.embedding_dim}."
         )
     if use_cache:
