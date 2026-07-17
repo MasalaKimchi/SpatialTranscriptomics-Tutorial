@@ -313,6 +313,7 @@ def save_benchmark_report(
         payload_schema=schema,
         write_payload=lambda temporary: df.to_csv(temporary, index=False),
         reader=lambda temporary: _read_benchmark_payload(temporary, cfg),
+        observed_schema=lambda decoded: decoded[1],
     )
     return path
 
@@ -472,6 +473,7 @@ def save_result_table(
         payload_schema=schema,
         write_payload=lambda temporary: frame.to_csv(temporary, index=False),
         reader=lambda temporary: _read_result_table(temporary, table_name, schema["columns"]),
+        observed_schema=lambda decoded: decoded[1],
     )
     return path
 
@@ -562,6 +564,7 @@ def save_json_result(
         payload_schema=schema,
         write_payload=lambda temporary: temporary.write_bytes(raw),
         reader=lambda temporary: _read_json_result(temporary, result_name, schema["keys"], kind),
+        observed_schema=lambda decoded: decoded[1],
     )
     return path
 

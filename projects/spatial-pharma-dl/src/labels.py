@@ -195,6 +195,7 @@ def save_label_table(
         reader=lambda temporary: _read_table(
             temporary, kind="label_table", sample_ids=[sample_id]
         ),
+        observed_schema=lambda decoded: decoded[1],
     )
     return path
 
@@ -247,6 +248,7 @@ def save_domain_table(
         reader=lambda temporary: _read_table(
             temporary, kind="domain_table", sample_ids=sample_ids
         ),
+        observed_schema=lambda decoded: decoded[1],
     )
     return path
 

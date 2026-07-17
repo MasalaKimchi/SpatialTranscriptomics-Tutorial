@@ -384,6 +384,7 @@ def _publish_embedding_cache(
             expected_spots=expected_spots,
             expected_dim=spec.embedding_dim,
         ),
+        observed_schema=lambda decoded: decoded[1],
     )
 
 

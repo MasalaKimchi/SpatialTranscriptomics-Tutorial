@@ -361,6 +361,7 @@ def save_patch_arrays(
         payload_schema=schema,
         write_payload=write_payload,
         reader=lambda temporary: _read_trusted_local_patch_npz(temporary, slide_id),
+        observed_schema=lambda decoded: decoded[1],
     )
     return path
 
@@ -478,6 +479,7 @@ def save_patch_index(
         payload_schema=schema,
         write_payload=lambda temporary: labels.to_parquet(temporary, index=False),
         reader=lambda temporary: _read_patch_index(temporary, sample_ids),
+        observed_schema=lambda decoded: decoded[1],
     )
     return path
 

@@ -391,6 +391,7 @@ def save_slide(
         payload_schema=schema,
         write_payload=lambda temporary: adata.write_h5ad(temporary),
         reader=lambda temporary: _read_processed_slide(temporary, sample_id),
+        observed_schema=lambda decoded: decoded[1],
     )
     return path
 

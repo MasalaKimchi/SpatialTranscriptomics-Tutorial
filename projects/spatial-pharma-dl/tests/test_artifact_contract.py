@@ -89,7 +89,10 @@ def test_every_projection_invalidates_relevant_inputs(kind: str, dimension: str)
             "cohort_manifest": "preprocessing",
             "preprocessing_manifest": "preprocessing",
         }[kind]
-        changed["configuration"][section]["changed"] = True  # type: ignore[index]
+        if kind == "embedding":
+            changed["configuration"][section]["model"] = "kaiko_vits16"  # type: ignore[index]
+        else:
+            changed["configuration"][section]["changed"] = True  # type: ignore[index]
     else:
         changed[dimension]["changed"] = "d" * 64  # type: ignore[index]
     assert build_fingerprint(kind, baseline).digest != build_fingerprint(
@@ -159,6 +162,20 @@ def test_malformed_duplicate_and_oversized_manifest_bytes_are_bounded(raw: bytes
         parse_manifest_bytes(raw)
     assert caught.value.reason_code == "malformed_manifest"
     assert len(str(caught.value)) < 300
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"[" * 2000 + b"0" + b"]" * 2000,
+        b'{"x":' * 900 + b"0" + b"}" * 900,
+    ],
+)
+def test_deep_bounded_manifest_bytes_are_typed(raw: bytes) -> None:
+    assert len(raw) < 65_536
+    with pytest.raises(ArtifactValidationError) as caught:
+        parse_manifest_bytes(raw)
+    assert caught.value.reason_code == "malformed_manifest"
 
 
 def test_utils_artifacts_is_import_light() -> None:
@@ -324,6 +341,29 @@ def test_reader_replacement_race_is_rejected(tmp_path: Path) -> None:
     assert caught.value.reason_code == "unstable_payload"
 
 
+def test_public_path_aba_cannot_change_admitted_decoder_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "patch.npz"
+    fingerprint = _write_pair(path, b"good")
+
+    def aba_reader(admitted_snapshot: Path):
+        held = path.with_name("held.npz")
+        path.rename(held)
+        path.write_bytes(b"evil")
+        path.unlink()
+        held.rename(path)
+        return admitted_snapshot.read_bytes()
+
+    admission = admit_artifact(
+        path,
+        expected_kind="patch",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        expected_fingerprint=fingerprint,
+        reader=aba_reader,
+    )
+    assert admission.value == b"good"
+    assert path.read_bytes() == b"good"
+
+
 def test_reuse_status_is_typed_and_missing_parent_has_no_side_effect(tmp_path: Path) -> None:
     path = tmp_path / "missing" / "patch.npz"
     fingerprint = build_fingerprint("patch", _inputs())
@@ -363,6 +403,7 @@ def _publish(
         payload_schema={"encoding": "bytes"},
         write_payload=lambda temporary: temporary.write_bytes(payload),
         reader=lambda temporary: temporary.read_bytes(),
+        observed_schema=lambda _decoded: {"encoding": "bytes"},
         _operation_hook=hook,
     )
     return fingerprint, manifest
@@ -394,6 +435,53 @@ def test_atomic_publication_validates_before_payload_first_manifest_last(tmp_pat
         reader=lambda candidate: candidate.read_bytes(),
     )
     assert admission.value == b"new-generation"
+
+
+def test_publication_rejects_observed_schema_drift_before_replace(tmp_path: Path) -> None:
+    path = tmp_path / "result.npz"
+    _publish(path, b"old-generation")
+    old_payload = path.read_bytes()
+    old_manifest = manifest_path(path).read_bytes()
+
+    with pytest.raises(ArtifactValidationError, match="publication_failed"):
+        publish_artifact(
+            path,
+            artifact_kind="patch",
+            contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+            fingerprint=build_fingerprint("patch", _inputs()),
+            payload_format="bytes",
+            payload_schema={"shape": [1]},
+            write_payload=lambda temporary: temporary.write_bytes(b"new-generation"),
+            reader=lambda temporary: temporary.read_bytes(),
+            observed_schema=lambda _decoded: {"shape": [2]},
+        )
+    assert path.read_bytes() == old_payload
+    assert manifest_path(path).read_bytes() == old_manifest
+
+
+def test_embedding_projection_omits_execution_controls() -> None:
+    baseline = _inputs()
+    baseline["configuration"]["foundation"] = {  # type: ignore[index]
+        "model": "phikon",
+        "enabled": True,
+        "cache": True,
+        "device": "cpu",
+        "batch_size": 8,
+    }
+    expected = build_fingerprint("embedding", baseline)
+    for leaf, value in (
+        ("enabled", False),
+        ("cache", False),
+        ("device", "cuda"),
+        ("batch_size", 128),
+    ):
+        changed = json.loads(json.dumps(baseline))
+        changed["configuration"]["foundation"][leaf] = value
+        assert build_fingerprint("embedding", changed).digest == expected.digest
+
+    changed_model = json.loads(json.dumps(baseline))
+    changed_model["configuration"]["foundation"]["model"] = "kaiko_vits16"
+    assert build_fingerprint("embedding", changed_model).digest != expected.digest
 
 
 PUBLICATION_FAULTS = (
@@ -471,5 +559,6 @@ def test_publication_temp_paths_are_unique_same_directory_and_suffix_preserving(
             payload_schema={"encoding": "bytes"},
             write_payload=(writer if payload == b"generation-one" else lambda temporary: (seen.append(temporary), temporary.write_bytes(payload))),
             reader=lambda temporary: temporary.read_bytes(),
+            observed_schema=lambda _decoded: {"encoding": "bytes"},
         )
     assert len({candidate.name for candidate in seen}) == 2

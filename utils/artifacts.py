@@ -45,19 +45,22 @@ ARTIFACT_CONTRACT_VERSIONS = {
     "preprocessing_manifest": "preprocessing-manifest-wrapper-v1",
 }
 
-_CONFIG_PROJECTIONS = {
-    "root_h5ad": ("preprocessing",),
-    "processed_slide": ("preprocessing",),
-    "label_table": ("labels",),
-    "domain_table": ("labels",),
-    "patch": ("patches",),
-    "patch_index": ("patches",),
-    "embedding": ("foundation",),
-    "checkpoint": ("training",),
-    "report": ("evaluation",),
-    "summary": ("evaluation",),
-    "cohort_manifest": ("preprocessing",),
-    "preprocessing_manifest": ("preprocessing",),
+_CONFIG_PROJECTIONS: dict[str, dict[str, tuple[str, ...] | None]] = {
+    "root_h5ad": {"preprocessing": None},
+    "processed_slide": {"preprocessing": None},
+    "label_table": {"labels": None},
+    "domain_table": {"labels": None},
+    "patch": {"patches": None},
+    "patch_index": {"patches": None},
+    # Execution controls cannot change frozen model outputs. Model identity and
+    # numerical preprocessing live in source/upstream inputs supplied by the
+    # embedding adapter; only the selected encoder is scientific configuration.
+    "embedding": {"foundation": ("model",)},
+    "checkpoint": {"training": None},
+    "report": {"evaluation": None},
+    "summary": {"evaluation": None},
+    "cohort_manifest": {"preprocessing": None},
+    "preprocessing_manifest": {"preprocessing": None},
 }
 
 _REGENERATION_GUIDANCE = "Regenerate this artifact from its trusted source."
@@ -329,7 +332,13 @@ def parse_manifest_bytes(
         admitted = _admit_tree(parsed, basename=basename)
     except ArtifactValidationError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+        TypeError,
+    ):
         raise _error("malformed_manifest", basename=basename) from None
     return _manifest_from_tree(admitted, expected_basename=expected_basename)
 
@@ -364,11 +373,21 @@ def build_fingerprint(
         raise _error("unsupported_artifact_kind")
     admitted = _admit_projection_inputs(inputs, artifact_kind)
     configuration = admitted["configuration"]
-    projected_configuration = {
-        key: configuration[key]
-        for key in _CONFIG_PROJECTIONS[artifact_kind]
-        if key in configuration
-    }
+    projected_configuration: dict[str, object] = {}
+    for section, leaves in _CONFIG_PROJECTIONS[artifact_kind].items():
+        if section not in configuration:
+            continue
+        section_value = configuration[section]
+        if leaves is None:
+            projected_configuration[section] = section_value
+            continue
+        if type(section_value) is not dict:
+            raise _error("invalid_fingerprint_inputs", kind=artifact_kind)
+        projected_configuration[section] = {
+            leaf: section_value[leaf]
+            for leaf in leaves
+            if leaf in section_value
+        }
     version = (
         ARTIFACT_CONTRACT_VERSIONS[artifact_kind]
         if contract_version is None
@@ -466,38 +485,65 @@ def read_artifact_manifest(
     return parse_manifest_bytes(raw, expected_basename=basename)
 
 
-def _hash_payload_descriptor(
+def _snapshot_payload_descriptor(
     path: Path, *, kind: str, basename: str
-) -> tuple[int, str, os.stat_result]:
+) -> tuple[int, str, os.stat_result, Path, os.stat_result]:
     try:
         before_path = path.lstat()
         if stat.S_ISLNK(before_path.st_mode) or not stat.S_ISREG(before_path.st_mode):
             raise _error("invalid_payload_file", kind=kind, basename=basename)
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
+        snapshot_descriptor: int | None = None
+        snapshot_path: Path | None = None
         try:
             before = os.fstat(descriptor)
             if not _same_generation(before_path, before) or not stat.S_ISREG(before.st_mode):
                 raise _error("unstable_payload", kind=kind, basename=basename)
             digest = hashlib.sha256()
             count = 0
+            snapshot_descriptor, snapshot_name = tempfile.mkstemp(
+                prefix="spatial-artifact-admitted-",
+                suffix="".join(path.suffixes),
+            )
+            snapshot_path = Path(snapshot_name)
             while True:
                 chunk = os.read(descriptor, CHECKSUM_CHUNK_SIZE)
                 if not chunk:
                     break
                 count += len(chunk)
                 digest.update(chunk)
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(snapshot_descriptor, view)
+                    view = view[written:]
             after = os.fstat(descriptor)
             if not _same_generation(before, after) or count != after.st_size:
                 raise _error("unstable_payload", kind=kind, basename=basename)
-            return count, digest.hexdigest(), after
+            os.fsync(snapshot_descriptor)
+            snapshot_state = os.fstat(snapshot_descriptor)
+            if snapshot_state.st_size != count:
+                raise _error("unstable_payload", kind=kind, basename=basename)
+            os.close(snapshot_descriptor)
+            snapshot_descriptor = None
+            return count, digest.hexdigest(), after, snapshot_path, snapshot_state
         finally:
+            if snapshot_descriptor is not None:
+                os.close(snapshot_descriptor)
             os.close(descriptor)
+            if snapshot_path is not None and not snapshot_path.exists():
+                snapshot_path = None
     except ArtifactValidationError:
+        if "snapshot_path" in locals() and snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
         raise
     except FileNotFoundError:
+        if "snapshot_path" in locals() and snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
         raise _error("missing_payload", kind=kind, basename=basename) from None
     except OSError:
+        if "snapshot_path" in locals() and snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
         raise _error("invalid_payload_file", kind=kind, basename=basename) from None
 
 
@@ -545,29 +591,37 @@ def admit_artifact(
         raise _error("stale_fingerprint", kind=expected_kind, basename=basename)
     if manifest.fingerprint.canonical_inputs_json != expected_fingerprint.canonical_inputs_json:
         raise _error("stale_fingerprint", kind=expected_kind, basename=basename)
-    byte_count, checksum, hashed_state = _hash_payload_descriptor(
+    byte_count, checksum, hashed_state, snapshot_path, snapshot_state = _snapshot_payload_descriptor(
         path, kind=expected_kind, basename=basename
     )
-    if byte_count == 0:
-        raise _error("invalid_payload_file", kind=expected_kind, basename=basename)
-    if byte_count != manifest.payload_byte_count:
-        raise _error("byte_count_mismatch", kind=expected_kind, basename=basename)
-    if not hmac.compare_digest(checksum, manifest.payload_sha256):
-        raise _error("checksum_mismatch", kind=expected_kind, basename=basename)
-    before_reader = _path_generation(path, kind=expected_kind, basename=basename)
-    if not _same_generation(hashed_state, before_reader):
-        raise _error("unstable_payload", kind=expected_kind, basename=basename)
     try:
-        value = reader(path)
-    except ArtifactValidationError:
-        raise
-    except (ValueError, TypeError, KeyError, OSError):
-        raise _error(
-            "reader_validation_failed", kind=expected_kind, basename=basename
-        ) from None
-    after_reader = _path_generation(path, kind=expected_kind, basename=basename)
-    if not _same_generation(hashed_state, after_reader):
-        raise _error("unstable_payload", kind=expected_kind, basename=basename)
+        if byte_count == 0:
+            raise _error("invalid_payload_file", kind=expected_kind, basename=basename)
+        if byte_count != manifest.payload_byte_count:
+            raise _error("byte_count_mismatch", kind=expected_kind, basename=basename)
+        if not hmac.compare_digest(checksum, manifest.payload_sha256):
+            raise _error("checksum_mismatch", kind=expected_kind, basename=basename)
+        before_reader = _path_generation(path, kind=expected_kind, basename=basename)
+        if not _same_generation(hashed_state, before_reader):
+            raise _error("unstable_payload", kind=expected_kind, basename=basename)
+        try:
+            value = reader(snapshot_path)
+        except ArtifactValidationError:
+            raise
+        except (ValueError, TypeError, KeyError, OSError):
+            raise _error(
+                "reader_validation_failed", kind=expected_kind, basename=basename
+            ) from None
+        after_snapshot = _path_generation(
+            snapshot_path, kind=expected_kind, basename=basename
+        )
+        if not _same_generation(snapshot_state, after_snapshot):
+            raise _error("unstable_payload", kind=expected_kind, basename=basename)
+    finally:
+        try:
+            snapshot_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     return ArtifactAdmission(payload_path=path, manifest=manifest, value=value)
 
 
@@ -669,6 +723,7 @@ def publish_artifact(
     payload_schema: object,
     write_payload: Callable[[Path], object],
     reader: Callable[[Path], _T],
+    observed_schema: Callable[[_T], object],
     _operation_hook: Callable[[str], object] | None = None,
 ) -> ArtifactManifest:
     """Publish one validated payload/sidecar pair with a manifest-last commit."""
@@ -688,9 +743,10 @@ def publish_artifact(
         write_payload(temp_payload)
         hook("fsync_payload")
         _fsync_file(temp_payload)
-        byte_count, checksum, _state = _hash_payload_descriptor(
+        byte_count, checksum, _state, checksum_snapshot, _snapshot_state = _snapshot_payload_descriptor(
             temp_payload, kind=artifact_kind, basename=basename
         )
+        checksum_snapshot.unlink(missing_ok=True)
         if byte_count == 0:
             raise _error("invalid_payload_file", kind=artifact_kind, basename=basename)
         manifest = _completed_manifest(
@@ -726,6 +782,13 @@ def publish_artifact(
             raise _error("unstable_manifest", kind=artifact_kind, basename=basename)
         if temp_manifest.read_bytes() != sidecar_bytes:
             raise _error("unstable_manifest", kind=artifact_kind, basename=basename)
+        admitted_observed_schema = _admit_tree(
+            observed_schema(admission.value), kind=artifact_kind, basename=basename
+        )
+        if _canonical_json(admitted_observed_schema) != manifest.payload_schema_json:
+            raise _error(
+                "payload_schema_mismatch", kind=artifact_kind, basename=basename
+            )
 
         hook("replace_payload")
         os.replace(temp_payload, path)

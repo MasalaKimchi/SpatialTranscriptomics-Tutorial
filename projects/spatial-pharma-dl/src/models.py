@@ -345,6 +345,7 @@ def save_model_checkpoint(
             temporary,
         ),
         reader=_read_trusted_local_checkpoint,
+        observed_schema=lambda decoded: decoded[1],
     )
     return destination
 

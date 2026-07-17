@@ -700,6 +700,7 @@ def _publish_test_embedding(cache_path, embeddings, spot_ids, labels, cfg):
         payload_schema=schema,
         write_payload=write_payload,
         reader=lambda _path: None,
+        observed_schema=lambda _decoded: schema,
     )
 
 
