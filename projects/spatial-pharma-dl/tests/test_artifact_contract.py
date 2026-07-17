@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sys
+from pathlib import Path
 
 import pytest
 
 from utils.artifacts import (
     ARTIFACT_CONTRACT_VERSIONS,
+    MANIFEST_SCHEMA_VERSION,
     ArtifactValidationError,
+    admit_artifact,
+    artifact_reuse_status,
     build_fingerprint,
+    manifest_path,
     parse_manifest_bytes,
 )
 
@@ -146,5 +153,159 @@ def test_utils_artifacts_is_import_light() -> None:
 
 
 def test_duplicate_json_is_rejected_before_canonicalization() -> None:
-    with pytest.raises(ArtifactValidationError, match="regenerate"):
+    with pytest.raises(ArtifactValidationError, match="Regenerate"):
         parse_manifest_bytes(json.dumps({"safe": True}).replace("}", ',"safe":false}').encode())
+
+
+def _write_pair(path: Path, payload: bytes = b"trusted-payload"):
+    fingerprint = build_fingerprint("patch", _inputs())
+    path.write_bytes(payload)
+    manifest = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "artifact_kind": "patch",
+        "contract_version": ARTIFACT_CONTRACT_VERSIONS["patch"],
+        "complete": True,
+        "fingerprint": fingerprint.to_dict(),
+        "payload": {
+            "filename": path.name,
+            "format": "bytes",
+            "byte_count": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "schema": {"encoding": "bytes"},
+        },
+    }
+    manifest_path(path).write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")), encoding="utf-8"
+    )
+    return fingerprint
+
+
+def test_admission_checks_integrity_before_callback(tmp_path: Path) -> None:
+    path = tmp_path / "patch.npz"
+    fingerprint = _write_pair(path)
+    calls: list[str] = []
+    admission = admit_artifact(
+        path,
+        expected_kind="patch",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        expected_fingerprint=fingerprint,
+        reader=lambda candidate: calls.append(candidate.read_bytes().decode()) or "decoded",
+    )
+    assert admission.value == "decoded"
+    assert calls == ["trusted-payload"]
+    assert admission.manifest.to_dict()["payload"]["filename"] == path.name
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (lambda path: path.write_bytes(b"truncated"), "byte_count_mismatch"),
+        (lambda path: manifest_path(path).write_text("", encoding="utf-8"), "malformed_manifest"),
+        (lambda path: manifest_path(path).unlink(), "legacy_artifact"),
+    ],
+)
+def test_incomplete_checksum_and_legacy_reject_before_callback(
+    tmp_path: Path, mutation, reason: str
+) -> None:
+    path = tmp_path / "patch.npz"
+    fingerprint = _write_pair(path)
+    mutation(path)
+
+    def forbidden(_path: Path):
+        raise AssertionError("decoder ran before admission")
+
+    with pytest.raises(ArtifactValidationError) as caught:
+        admit_artifact(
+            path,
+            expected_kind="patch",
+            expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+            expected_fingerprint=fingerprint,
+            reader=forbidden,
+        )
+    assert caught.value.reason_code == reason
+
+
+def test_stale_fingerprint_and_callback_schema_failure_are_typed(tmp_path: Path) -> None:
+    path = tmp_path / "patch.npz"
+    expected = _write_pair(path)
+    stale_inputs = _inputs()
+    stale_inputs["configuration"]["patches"]["size"] = 512  # type: ignore[index]
+    stale = build_fingerprint("patch", stale_inputs)
+    with pytest.raises(ArtifactValidationError) as caught:
+        admit_artifact(
+            path,
+            expected_kind="patch",
+            expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+            expected_fingerprint=stale,
+            reader=lambda _path: pytest.fail("stale payload decoded"),
+        )
+    assert caught.value.reason_code == "stale_fingerprint"
+
+    def invalid_schema(_path: Path):
+        raise ValueError("attacker controlled parser prose")
+
+    with pytest.raises(ArtifactValidationError) as caught:
+        admit_artifact(
+            path,
+            expected_kind="patch",
+            expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+            expected_fingerprint=expected,
+            reader=invalid_schema,
+        )
+    assert caught.value.reason_code == "reader_validation_failed"
+    assert "attacker" not in str(caught.value)
+
+
+def test_symlink_payload_is_rejected(tmp_path: Path) -> None:
+    target = tmp_path / "real.npz"
+    fingerprint = _write_pair(target)
+    link = tmp_path / "link.npz"
+    link.symlink_to(target)
+    manifest_path(link).write_bytes(
+        manifest_path(target).read_bytes().replace(target.name.encode(), link.name.encode())
+    )
+    with pytest.raises(ArtifactValidationError) as caught:
+        admit_artifact(
+            link,
+            expected_kind="patch",
+            expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+            expected_fingerprint=fingerprint,
+            reader=lambda _path: pytest.fail("symlink decoded"),
+        )
+    assert caught.value.reason_code == "invalid_payload_file"
+
+
+def test_reader_replacement_race_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "patch.npz"
+    fingerprint = _write_pair(path)
+
+    def replacing_reader(candidate: Path):
+        replacement = candidate.with_name("replacement.npz")
+        replacement.write_bytes(candidate.read_bytes())
+        os.replace(replacement, candidate)
+        return "must-not-return"
+
+    with pytest.raises(ArtifactValidationError) as caught:
+        admit_artifact(
+            path,
+            expected_kind="patch",
+            expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+            expected_fingerprint=fingerprint,
+            reader=replacing_reader,
+        )
+    assert caught.value.reason_code == "unstable_payload"
+
+
+def test_reuse_status_is_typed_and_missing_parent_has_no_side_effect(tmp_path: Path) -> None:
+    path = tmp_path / "missing" / "patch.npz"
+    fingerprint = build_fingerprint("patch", _inputs())
+    status = artifact_reuse_status(
+        path,
+        expected_kind="patch",
+        expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["patch"],
+        expected_fingerprint=fingerprint,
+        reader=lambda _path: None,
+    )
+    assert not status.reusable
+    assert status.reason_code == "missing_payload"
+    assert not path.parent.exists()

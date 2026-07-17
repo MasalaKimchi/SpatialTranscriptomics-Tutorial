@@ -12,9 +12,10 @@ import hmac
 import json
 import math
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 MANIFEST_SCHEMA_VERSION = "spatial-pharma-artifact-manifest-v1"
 FINGERPRINT_ALGORITHM = "sha256"
@@ -383,6 +384,190 @@ def manifest_path(payload_path: str | os.PathLike[str]) -> Path:
     return path.with_name(path.name + MANIFEST_SUFFIX)
 
 
+_T = TypeVar("_T")
+
+
+def _same_generation(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_mode,
+        first.st_size,
+        first.st_mtime_ns,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_mode,
+        second.st_size,
+        second.st_mtime_ns,
+    )
+
+
+def _read_manifest_file(path: Path, *, basename: str) -> bytes:
+    try:
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise _error("invalid_manifest_file", basename=basename)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            if not _same_generation(before, opened) or opened.st_size > MAX_MANIFEST_BYTES:
+                raise _error("malformed_manifest", basename=basename)
+            chunks: list[bytes] = []
+            remaining = MAX_MANIFEST_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, min(8192, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            after = os.fstat(descriptor)
+            if not _same_generation(opened, after):
+                raise _error("unstable_manifest", basename=basename)
+            raw = b"".join(chunks)
+            if len(raw) > MAX_MANIFEST_BYTES:
+                raise _error("malformed_manifest", basename=basename)
+            return raw
+        finally:
+            os.close(descriptor)
+    except ArtifactValidationError:
+        raise
+    except FileNotFoundError:
+        raise
+    except OSError:
+        raise _error("invalid_manifest_file", basename=basename) from None
+
+
+def _hash_payload_descriptor(
+    path: Path, *, kind: str, basename: str
+) -> tuple[int, str, os.stat_result]:
+    try:
+        before_path = path.lstat()
+        if stat.S_ISLNK(before_path.st_mode) or not stat.S_ISREG(before_path.st_mode):
+            raise _error("invalid_payload_file", kind=kind, basename=basename)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            before = os.fstat(descriptor)
+            if not _same_generation(before_path, before) or not stat.S_ISREG(before.st_mode):
+                raise _error("unstable_payload", kind=kind, basename=basename)
+            digest = hashlib.sha256()
+            count = 0
+            while True:
+                chunk = os.read(descriptor, CHECKSUM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                count += len(chunk)
+                digest.update(chunk)
+            after = os.fstat(descriptor)
+            if not _same_generation(before, after) or count != after.st_size:
+                raise _error("unstable_payload", kind=kind, basename=basename)
+            return count, digest.hexdigest(), after
+        finally:
+            os.close(descriptor)
+    except ArtifactValidationError:
+        raise
+    except FileNotFoundError:
+        raise _error("missing_payload", kind=kind, basename=basename) from None
+    except OSError:
+        raise _error("invalid_payload_file", kind=kind, basename=basename) from None
+
+
+def _path_generation(path: Path, *, kind: str, basename: str) -> os.stat_result:
+    try:
+        observed = path.lstat()
+    except OSError:
+        raise _error("unstable_payload", kind=kind, basename=basename) from None
+    if stat.S_ISLNK(observed.st_mode) or not stat.S_ISREG(observed.st_mode):
+        raise _error("unstable_payload", kind=kind, basename=basename)
+    return observed
+
+
+def admit_artifact(
+    payload_path: str | os.PathLike[str],
+    *,
+    expected_kind: str,
+    expected_contract_version: str,
+    expected_fingerprint: ArtifactFingerprint,
+    reader: Callable[[Path], _T],
+    _manifest_path: Path | None = None,
+    _logical_basename: str | None = None,
+) -> ArtifactAdmission:
+    """Admit stable bytes before invoking the supplied production reader."""
+    path = Path(payload_path)
+    basename = _bounded_basename(_logical_basename or path.name)
+    sidecar = _manifest_path if _manifest_path is not None else manifest_path(path)
+    if type(expected_kind) is not str or expected_kind not in ARTIFACT_CONTRACT_VERSIONS:
+        raise _error("unsupported_artifact_kind", basename=basename)
+    if type(expected_contract_version) is not str:
+        raise _error("unsupported_manifest", kind=expected_kind, basename=basename)
+    if type(expected_fingerprint) is not ArtifactFingerprint:
+        raise _error("invalid_fingerprint_inputs", kind=expected_kind, basename=basename)
+    try:
+        raw = _read_manifest_file(sidecar, basename=basename)
+    except FileNotFoundError:
+        reason = "legacy_artifact" if path.exists() else "missing_payload"
+        raise _error(reason, kind=expected_kind, basename=basename) from None
+    manifest = parse_manifest_bytes(raw, expected_basename=basename)
+    if manifest.artifact_kind != expected_kind:
+        raise _error("unsupported_manifest", kind=expected_kind, basename=basename)
+    if manifest.contract_version != expected_contract_version:
+        raise _error("stale_fingerprint", kind=expected_kind, basename=basename)
+    if not hmac.compare_digest(manifest.fingerprint.digest, expected_fingerprint.digest):
+        raise _error("stale_fingerprint", kind=expected_kind, basename=basename)
+    if manifest.fingerprint.canonical_inputs_json != expected_fingerprint.canonical_inputs_json:
+        raise _error("stale_fingerprint", kind=expected_kind, basename=basename)
+    byte_count, checksum, hashed_state = _hash_payload_descriptor(
+        path, kind=expected_kind, basename=basename
+    )
+    if byte_count == 0:
+        raise _error("invalid_payload_file", kind=expected_kind, basename=basename)
+    if byte_count != manifest.payload_byte_count:
+        raise _error("byte_count_mismatch", kind=expected_kind, basename=basename)
+    if not hmac.compare_digest(checksum, manifest.payload_sha256):
+        raise _error("checksum_mismatch", kind=expected_kind, basename=basename)
+    before_reader = _path_generation(path, kind=expected_kind, basename=basename)
+    if not _same_generation(hashed_state, before_reader):
+        raise _error("unstable_payload", kind=expected_kind, basename=basename)
+    try:
+        value = reader(path)
+    except ArtifactValidationError:
+        raise
+    except (ValueError, TypeError, KeyError, OSError):
+        raise _error(
+            "reader_validation_failed", kind=expected_kind, basename=basename
+        ) from None
+    after_reader = _path_generation(path, kind=expected_kind, basename=basename)
+    if not _same_generation(hashed_state, after_reader):
+        raise _error("unstable_payload", kind=expected_kind, basename=basename)
+    return ArtifactAdmission(payload_path=path, manifest=manifest, value=value)
+
+
+def artifact_reuse_status(
+    payload_path: str | os.PathLike[str],
+    *,
+    expected_kind: str,
+    expected_contract_version: str,
+    expected_fingerprint: ArtifactFingerprint,
+    reader: Callable[[Path], _T],
+) -> ArtifactReuseStatus:
+    """Return a typed reuse decision without modifying filesystem state."""
+    try:
+        admission = admit_artifact(
+            payload_path,
+            expected_kind=expected_kind,
+            expected_contract_version=expected_contract_version,
+            expected_fingerprint=expected_fingerprint,
+            reader=reader,
+        )
+    except ArtifactValidationError as exc:
+        return ArtifactReuseStatus(reusable=False, reason_code=exc.reason_code)
+    return ArtifactReuseStatus(
+        reusable=True, reason_code="reusable", admission=admission
+    )
+
+
 __all__ = [
     "ARTIFACT_CONTRACT_VERSIONS",
     "ArtifactAdmission",
@@ -390,6 +575,9 @@ __all__ = [
     "ArtifactManifest",
     "ArtifactReuseStatus",
     "ArtifactValidationError",
+    "MANIFEST_SCHEMA_VERSION",
+    "admit_artifact",
+    "artifact_reuse_status",
     "build_fingerprint",
     "manifest_path",
     "parse_manifest_bytes",
