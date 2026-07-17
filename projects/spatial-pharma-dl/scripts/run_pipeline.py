@@ -72,10 +72,12 @@ def _need_patch_rebuild(
 
 def _curate_sources(cfg: dict, slide_ids: list[str]):
     """Attempt remote sources and finalize strict or partial admission once."""
+    allow_partial = cfg["cohort_policy"]["allow_partial"]
     successful: list[str] = []
     failures: dict[str, str] = {}
     first_source_error: SourceAcquisitionError | None = None
-    for slide_id in slide_ids:
+    unattempted: list[str] = []
+    for index, slide_id in enumerate(slide_ids):
         try:
             preprocess_cohort([slide_id], cfg=cfg)
             successful.append(slide_id)
@@ -83,12 +85,17 @@ def _curate_sources(cfg: dict, slide_ids: list[str]):
             if first_source_error is None:
                 first_source_error = exc
             failures[slide_id] = "Source loading failed for the configured slide."
+            if not allow_partial:
+                unattempted = slide_ids[index + 1 :]
+                break
     try:
-        return admit_run(
-            cfg,
-            available_slide_ids=successful,
-            failures=failures,
-        )
+        admission_kwargs = {
+            "available_slide_ids": successful,
+            "failures": failures,
+        }
+        if unattempted:
+            admission_kwargs["unattempted_slide_ids"] = unattempted
+        return admit_run(cfg, **admission_kwargs)
     except CohortAdmissionError as exc:
         if first_source_error is not None:
             raise exc from first_source_error

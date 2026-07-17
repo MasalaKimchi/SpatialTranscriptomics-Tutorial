@@ -141,6 +141,59 @@ def test_hostile_repr_is_never_executed_while_reporting_invalid_values() -> None
         "training.lr",
         "config.training.lr",
     }
+    assert [issue.path for issue in caught.value.issues].count("config.<key>") == 1
+
+
+def test_invalid_primitive_keys_have_deterministic_deduplicated_diagnostics() -> None:
+    first = _valid_config()
+    first[2] = "second"
+    first[1] = "first"
+    second = _valid_config()
+    second[1] = "first"
+    second[2] = "second"
+
+    with pytest.raises(ConfigValidationError) as caught_first:
+        resolve_config(first)
+    with pytest.raises(ConfigValidationError) as caught_second:
+        resolve_config(second)
+
+    first_keys = [
+        issue.received
+        for issue in caught_first.value.issues
+        if issue.path == "config.<key>"
+    ]
+    second_keys = [
+        issue.received
+        for issue in caught_second.value.issues
+        if issue.path == "config.<key>"
+    ]
+    assert first_keys == second_keys == [1, 2]
+    assert str(caught_first.value) == str(caught_second.value)
+
+
+def test_invalid_key_sort_never_calls_user_repr_or_comparison() -> None:
+    class HostileKey:
+        def __init__(self, stable_hash: int):
+            self.stable_hash = stable_hash
+
+        def __hash__(self) -> int:
+            return self.stable_hash
+
+        def __repr__(self) -> str:
+            raise AssertionError("invalid-key sorting executed repr")
+
+        def __lt__(self, _other: object) -> bool:
+            raise AssertionError("invalid-key sorting executed comparison")
+
+    cfg = _valid_config()
+    cfg[HostileKey(2)] = "second"
+    cfg[HostileKey(1)] = "first"
+
+    with pytest.raises(ConfigValidationError) as caught:
+        resolve_config(cfg)
+
+    assert [issue.path for issue in caught.value.issues].count("config.<key>") == 2
+    assert str(caught.value).count("received <HostileKey>") == 2
 
 
 def test_canonical_json_sorts_mappings_but_preserves_cohort_lists() -> None:

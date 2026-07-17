@@ -288,6 +288,24 @@ def _safe_received(value: object) -> str:
     return f"<{type(value).__name__}>"
 
 
+def _invalid_key_sort_token(value: object) -> tuple[object, ...]:
+    """Return a deterministic token without user repr, hash, or comparison."""
+    value_type = type(value)
+    if value is None:
+        return (0,)
+    if value_type is bool:
+        return (1, int(value))
+    if value_type is int:
+        return (2, value)
+    if value_type is float:
+        return (3, value.hex())
+    if value_type is bytes:
+        return (4, len(value), value[:64].hex())
+    if value_type is tuple:
+        return (5, len(value), tuple(_invalid_key_sort_token(item) for item in value))
+    return (99, value_type.__module__, value_type.__qualname__)
+
+
 class _Issues:
     def __init__(self) -> None:
         self.values: list[ValidationIssue] = []
@@ -330,7 +348,10 @@ def _mapping(
             f"Set {path} to a YAML mapping with the documented fields.",
         )
         return None
-    bad_keys = [key for key in value if not isinstance(key, str)]
+    bad_keys = sorted(
+        (key for key in value if type(key) is not str),
+        key=_invalid_key_sort_token,
+    )
     for key in bad_keys:
         issues.add(
             f"{path}.<key>",
@@ -341,7 +362,7 @@ def _mapping(
     if allowed is not None:
         allowed_set = set(allowed)
         for key in sorted(
-            (key for key in value if isinstance(key, str) and key not in allowed_set)
+            (key for key in value if type(key) is str and key not in allowed_set)
         ):
             issues.add(
                 f"{path}.{key}",
@@ -741,10 +762,7 @@ def _validate_json_tree(value: object, path: str, issues: _Issues) -> object:
         return [_validate_json_tree(item, f"{path}[{index}]", issues) for index, item in enumerate(value)]
     if isinstance(value, Mapping):
         result: dict[str, object] = {}
-        for key in value:
-            if not isinstance(key, str):
-                issues.add(f"{path}.<key>", key, "a string JSON object key", "Replace the non-string key.")
-        for key in sorted(key for key in value if isinstance(key, str)):
+        for key in sorted(key for key in value if type(key) is str):
             result[key] = _validate_json_tree(value[key], f"{path}.{key}", issues)
         return result
     issues.add(
@@ -812,6 +830,7 @@ def admit_run(
     *,
     available_slide_ids: Collection[str] | None = None,
     failures: Mapping[str, str] | None = None,
+    unattempted_slide_ids: Collection[str] | None = None,
 ) -> AdmittedRun:
     """Resolve and admit one ordered cohort without filesystem side effects.
 
@@ -826,23 +845,36 @@ def admit_run(
         for cohort in ("oncology", "external", "benchmark")
         for slide_id in normalized["cohorts"][cohort]
     }
-    if available_slide_ids is None:
-        available = None
-    else:
-        if isinstance(available_slide_ids, (str, bytes)):
+    def normalize_ids(
+        values: Collection[str] | None, *, field: str
+    ) -> set[str] | None:
+        if values is None:
+            return None
+        if isinstance(values, (str, bytes)):
             raise CohortAdmissionInputError(
-                "available_slide_ids must be a collection of configured string slide IDs."
+                f"{field} must be a collection of configured string slide IDs."
             )
-        available = set(available_slide_ids)
-        invalid_available = [
-            item
-            for item in available
-            if not isinstance(item, str) or item not in configured_ids
-        ]
-        if invalid_available:
+        try:
+            original_items = list(values)
+        except TypeError as exc:
             raise CohortAdmissionInputError(
-                "available_slide_ids contains an unknown or non-string slide ID."
+                f"{field} must be an iterable of configured string slide IDs."
+            ) from exc
+        if any(type(item) is not str for item in original_items):
+            raise CohortAdmissionInputError(
+                f"{field} contains a non-string slide ID."
             )
+        if any(item not in configured_ids for item in original_items):
+            raise CohortAdmissionInputError(
+                f"{field} contains an unknown slide ID."
+            )
+        return set(original_items)
+
+    available = normalize_ids(available_slide_ids, field="available_slide_ids")
+    unattempted = normalize_ids(
+        unattempted_slide_ids,
+        field="unattempted_slide_ids",
+    ) or set()
     failure_reasons: dict[str, str] = {}
     if failures is not None:
         if not isinstance(failures, Mapping):
@@ -889,6 +921,16 @@ def admit_run(
                         "skipped",
                         "source_load_failed",
                         "Source loading failed; correct the source or rerun with a usable slide.",
+                    )
+                )
+            elif slide_id in unattempted:
+                skipped.append(
+                    SlideAdmission(
+                        slide_id,
+                        cohort,
+                        "skipped",
+                        "source_not_attempted",
+                        "Source acquisition was not attempted after an earlier strict failure.",
                     )
                 )
             elif available is not None and slide_id not in available:

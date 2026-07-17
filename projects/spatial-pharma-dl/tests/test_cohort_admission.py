@@ -167,6 +167,55 @@ def test_admission_rejects_unknown_ids_and_non_string_failure_details(
         admit_run(_config(allow_partial=True), failures=failures)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "available",
+    [
+        "oncology_b",
+        [["oncology_b"]],
+        ["unknown_slide"],
+    ],
+)
+def test_admission_rejects_malformed_availability_before_normalization(
+    available: object,
+) -> None:
+    with pytest.raises(CohortAdmissionInputError):
+        admit_run(
+            _config(),
+            available_slide_ids=available,  # type: ignore[arg-type]
+        )
+
+
+def test_admission_does_not_hash_non_string_availability_members() -> None:
+    class HostileHash:
+        def __hash__(self) -> int:
+            raise AssertionError("availability validation executed hostile hash")
+
+    with pytest.raises(CohortAdmissionInputError, match="non-string"):
+        admit_run(
+            _config(),
+            available_slide_ids=[HostileHash()],  # type: ignore[list-item]
+        )
+
+
+def test_admission_accepts_duplicate_valid_availability_members() -> None:
+    admitted = admit_run(
+        _config(),
+        available_slide_ids=[
+            "oncology_b",
+            "oncology_b",
+            "oncology_a",
+            "external_a",
+            "benchmark_a",
+        ],
+    )
+    assert admitted.slide_ids == (
+        "oncology_b",
+        "oncology_a",
+        "external_a",
+        "benchmark_a",
+    )
+
+
 def _load_runner():
     spec = importlib.util.spec_from_file_location("cohort_admission_runner", RUNNER_PATH)
     assert spec is not None and spec.loader is not None
@@ -275,20 +324,62 @@ def test_runner_strict_source_failure_has_no_false_success(
     with pytest.raises(CohortAdmissionError) as caught:
         runner.main()
     manifest = caught.value.manifest
-    assert attempted == ["oncology_b", "oncology_a", "external_a", "benchmark_a"]
-    assert [item.slide_id for item in manifest.configured] == attempted
-    assert [item.slide_id for item in manifest.included] == [
+    assert attempted == ["oncology_b"]
+    assert [item.slide_id for item in manifest.configured] == [
+        "oncology_b",
         "oncology_a",
         "external_a",
         "benchmark_a",
     ]
-    assert [item.slide_id for item in manifest.skipped] == ["oncology_b"]
+    assert manifest.included == ()
+    assert [item.slide_id for item in manifest.skipped] == [
+        "oncology_b",
+        "oncology_a",
+        "external_a",
+        "benchmark_a",
+    ]
+    assert [item.reason_code for item in manifest.skipped] == [
+        "source_load_failed",
+        "source_not_attempted",
+        "source_not_attempted",
+        "source_not_attempted",
+    ]
     assert [item.slide_id for item in manifest.failed] == ["oncology_b"]
     assert manifest.failed[0].reason_code == "source_load_failed"
     assert "host-specific detail" not in manifest.canonical_json
     assert isinstance(caught.value.__cause__, runner.SourceAcquisitionError)
     assert "Pipeline complete." not in capsys.readouterr().out
     assert not (tmp_path / "cohort_manifest.json").exists()
+
+
+def test_runner_strict_failure_forbids_later_preprocessing_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_runner()
+    cfg = _config()
+    attempted: list[str] = []
+
+    def preprocess(ids, cfg):
+        attempted.extend(ids)
+        if ids == ["oncology_b"]:
+            raise runner.SourceAcquisitionError("first source failed")
+        raise AssertionError("later preprocessing or cache publication was reached")
+
+    monkeypatch.setattr(runner, "preprocess_cohort", preprocess)
+
+    with pytest.raises(CohortAdmissionError) as caught:
+        runner._curate_sources(
+            cfg,
+            ["oncology_b", "oncology_a", "external_a", "benchmark_a"],
+        )
+
+    assert attempted == ["oncology_b"]
+    assert [item.reason_code for item in caught.value.manifest.skipped] == [
+        "source_load_failed",
+        "source_not_attempted",
+        "source_not_attempted",
+        "source_not_attempted",
+    ]
 
 
 def test_runner_does_not_convert_programming_or_storage_defects_to_policy(
@@ -323,12 +414,19 @@ def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
     admission_calls: list[tuple[object, object]] = []
     original_admit = admit_run
 
-    def tracked_admit(raw, *, available_slide_ids=None, failures=None):
+    def tracked_admit(
+        raw,
+        *,
+        available_slide_ids=None,
+        failures=None,
+        unattempted_slide_ids=None,
+    ):
         admission_calls.append((available_slide_ids, failures))
         return original_admit(
             raw,
             available_slide_ids=available_slide_ids,
             failures=failures,
+            unattempted_slide_ids=unattempted_slide_ids,
         )
 
     def preprocess(ids, cfg):
