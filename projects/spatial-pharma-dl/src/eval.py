@@ -25,6 +25,7 @@ from .labels import classification_column, regression_columns
 from .models import get_gradcam_layer
 from .patches import patch_features
 from .transforms import imagenet_normalize
+from .validation import StageValidationError, require_non_empty
 
 
 @torch.no_grad()
@@ -34,6 +35,20 @@ def predict_cnn(
     device: str | None = None,
     batch_size: int = 64,
 ) -> tuple[np.ndarray, np.ndarray]:
+    if batch_size < 1:
+        raise StageValidationError(
+            stage="cnn_prediction",
+            subject="batch size",
+            observed=batch_size,
+            minimum=1,
+            guidance="Set batch_size to a positive integer before prediction.",
+        )
+    require_non_empty(
+        patches,
+        stage="cnn_prediction",
+        subject="NCHW patch batch",
+        guidance="Provide at least one patch before CNN prediction.",
+    )
     dev = resolve_device(device or "cpu")
     model.eval()
     all_cls, all_reg = [], []
@@ -125,7 +140,32 @@ def train_eval_rf_baseline(
     cfg: dict[str, Any] | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
-    cfg = cfg or load_config()
+    require_non_empty(
+        train_patches,
+        stage="rf_training",
+        subject="training patch rows",
+        guidance="Provide at least one training patch before fitting RF estimators.",
+    )
+    require_non_empty(
+        train_labels,
+        stage="rf_training",
+        subject="training label rows",
+        guidance="Provide at least one training label before fitting RF estimators.",
+    )
+    require_non_empty(
+        val_patches,
+        stage="rf_prediction",
+        subject="held-out patch rows",
+        guidance="Provide at least one held-out patch before RF prediction.",
+    )
+    require_non_empty(
+        val_labels,
+        stage="rf_prediction",
+        subject="held-out label rows",
+        guidance="Provide at least one held-out label before RF prediction.",
+    )
+    if cfg is None:
+        cfg = load_config()
     cls_col = classification_column(cfg)
     reg_cols = regression_columns(train_labels, cfg)
 

@@ -13,6 +13,7 @@ from .data import load_config
 from .eval import evaluate_fold, save_benchmark_report, train_eval_rf_baseline
 from .foundation import run_foundation_loso
 from .train import _maybe_subsample, load_slide_patches, loso_folds, train_loso
+from .validation import require_non_empty
 
 
 def _benchmark_row(
@@ -38,16 +39,65 @@ def run_rf_loso_fold(
     seed: int = 0,
 ) -> dict[str, Any]:
     """Train and evaluate RF baseline for one LOSO fold."""
-    cfg = cfg or load_config()
+    require_non_empty(
+        train_slides,
+        stage="rf_fold_training",
+        subject=f"training slide IDs for held-out slide {val_slide}",
+        guidance="Provide at least one outer-training slide for this RF fold.",
+    )
+    require_non_empty(
+        labels,
+        stage="rf_fold_training",
+        subject="cohort label rows",
+        guidance="Provide non-empty admitted labels before loading RF fold patches.",
+    )
+    if cfg is None:
+        cfg = load_config()
     train_patches, train_labels = [], []
     for sid in train_slides:
         patches, lab = load_slide_patches(sid, labels, cfg=cfg)
+        require_non_empty(
+            patches,
+            stage="rf_fold_training",
+            subject=f"training patches for slide {sid}",
+            guidance="Rebuild a non-empty aligned patch cache for this training slide.",
+        )
+        require_non_empty(
+            lab,
+            stage="rf_fold_training",
+            subject=f"training labels for slide {sid}",
+            guidance="Retain at least one aligned label row for this training slide.",
+        )
         train_patches.append(patches)
         train_labels.append(lab)
     val_patches, val_labels = load_slide_patches(val_slide, labels, cfg=cfg)
+    require_non_empty(
+        val_patches,
+        stage="rf_fold_training",
+        subject=f"held-out patches for slide {val_slide}",
+        guidance="Rebuild a non-empty aligned patch cache for the held-out slide.",
+    )
+    require_non_empty(
+        val_labels,
+        stage="rf_fold_training",
+        subject=f"held-out labels for slide {val_slide}",
+        guidance="Retain at least one aligned label row for the held-out slide.",
+    )
     quick_max = 500 if os.environ.get("PHARMA_QUICK") else None
     X_train = np.concatenate(train_patches, axis=0)
     lab_train = pd.concat(train_labels, ignore_index=True)
+    require_non_empty(
+        X_train,
+        stage="rf_fold_training",
+        subject="concatenated training patches",
+        guidance="Retain at least one aligned patch across RF training slides.",
+    )
+    require_non_empty(
+        lab_train,
+        stage="rf_fold_training",
+        subject="concatenated training labels",
+        guidance="Retain at least one aligned label across RF training slides.",
+    )
     X_train, lab_train = _maybe_subsample(X_train, lab_train, quick_max)
     val_patches, val_labels = _maybe_subsample(val_patches, val_labels, quick_max)
     rf = train_eval_rf_baseline(
@@ -67,7 +117,22 @@ def run_loso_benchmark(
     cfg: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run configured LOSO benchmark arms; return rows and CNN results."""
-    cfg = cfg or load_config()
+    unique_non_empty = [slide_id for slide_id in dict.fromkeys(slide_ids) if slide_id]
+    require_non_empty(
+        unique_non_empty,
+        stage="loso_benchmark_admission",
+        subject="unique non-empty slide IDs",
+        minimum=2,
+        guidance="Admit at least two distinct slides before running LOSO benchmarks.",
+    )
+    require_non_empty(
+        labels,
+        stage="loso_benchmark_admission",
+        subject="cohort label rows",
+        guidance="Generate non-empty cohort labels before running LOSO benchmarks.",
+    )
+    if cfg is None:
+        cfg = load_config()
     seed = int(cfg.get("seed", 0))
 
     cnn_results = train_loso(slide_ids, labels, cfg=cfg)

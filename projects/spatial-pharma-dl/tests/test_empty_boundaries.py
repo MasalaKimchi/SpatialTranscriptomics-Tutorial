@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src import data, labels, patches
+from src import benchmark, data, eval as evaluation, labels, patches, train
 from src.validation import StageValidationError, require_non_empty
 
 pytestmark = pytest.mark.offline
@@ -218,3 +218,173 @@ def test_patch_valid_extraction_preserves_shape_and_spot_order(
 
     assert patch_array.shape == (3, 3, 16, 16)
     assert metadata["spot_id"].tolist() == adata.obs_names.tolist()
+
+
+@pytest.mark.parametrize("slide_ids", [[], ["slide_a"], ["slide_a", "slide_a"]])
+def test_loso_fold_admission_rejects_fewer_than_two_unique_slides(slide_ids) -> None:
+    with pytest.raises(StageValidationError, match="loso_fold_admission") as caught:
+        train.loso_folds(slide_ids)
+
+    assert caught.value.minimum == 2
+
+
+def test_loso_training_empty_inputs_fail_before_config_or_fold(monkeypatch) -> None:
+    monkeypatch.setattr(train, "load_config", _forbidden)
+    monkeypatch.setattr(train, "train_one_fold", _forbidden)
+
+    with pytest.raises(StageValidationError, match="loso_training_admission"):
+        train.train_loso([], pd.DataFrame())
+
+    with pytest.raises(StageValidationError, match="cohort label rows"):
+        train.train_loso(["slide_a", "slide_b"], pd.DataFrame())
+
+
+def test_loso_benchmark_empty_inputs_fail_before_training_or_cache(monkeypatch) -> None:
+    monkeypatch.setattr(benchmark, "load_config", _forbidden)
+    monkeypatch.setattr(benchmark, "train_loso", _forbidden)
+
+    with pytest.raises(StageValidationError, match="loso_benchmark_admission"):
+        benchmark.run_loso_benchmark([], pd.DataFrame())
+
+
+def test_align_zero_rows_fails_before_patch_indexing(monkeypatch) -> None:
+    patch_array = np.ones((2, 3, 4, 4), dtype=np.float32)
+    metadata = pd.DataFrame(
+        {"slide_id": ["slide_a", "slide_a"], "spot_id": ["p0", "p1"]}
+    )
+    label_frame = pd.DataFrame(
+        {"slide_id": ["slide_a"], "spot_id": ["label_only"], "tme_class_id": [0]}
+    )
+    monkeypatch.setattr(
+        train,
+        "load_patch_arrays",
+        lambda *_args, **_kwargs: (patch_array, metadata),
+    )
+
+    with pytest.raises(StageValidationError, match="patch_label_alignment") as caught:
+        train.load_slide_patches("slide_a", label_frame, cfg={})
+
+    assert caught.value.observed == 0
+
+
+def _fold_cfg() -> dict:
+    return {
+        "training": {
+            "device": "cpu",
+            "model": "resnet18",
+            "pretrained": False,
+            "augment": False,
+            "batch_size": 2,
+            "num_workers": 0,
+            "epochs": 1,
+            "lr": 0.001,
+            "weight_decay": 0.0,
+            "cls_weight": 1.0,
+            "reg_weight": 1.0,
+            "patience": 1,
+        },
+        "labels": {
+            "classification_col": "tme_class_id",
+            "regression_targets": "modules",
+            "tme_classes": ["a", "b"],
+        },
+    }
+
+
+def _fold_labels() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "slide_id": ["train", "held"],
+            "spot_id": ["train_0", "held_0"],
+            "tme_class_id": [0, 1],
+            "module_signal": [0.2, 0.8],
+        }
+    )
+
+
+def test_train_fold_empty_slide_list_fails_before_device_or_model(monkeypatch) -> None:
+    monkeypatch.setattr(train, "resolve_device", _forbidden)
+    monkeypatch.setattr(train, "build_model", _forbidden)
+
+    with pytest.raises(StageValidationError, match="training slide IDs"):
+        train.train_one_fold([], "held", _fold_labels(), cfg=_fold_cfg())
+
+
+@pytest.mark.parametrize("empty_subject", ["train", "held"])
+def test_train_fold_empty_member_fails_before_device_or_model(
+    monkeypatch, empty_subject
+) -> None:
+    non_empty_patches = np.ones((1, 3, 4, 4), dtype=np.float32)
+    non_empty_labels = _fold_labels().iloc[[0]].reset_index(drop=True)
+
+    def load_stub(slide_id, *_args, **_kwargs):
+        if slide_id == empty_subject:
+            return np.zeros((0, 3, 4, 4), dtype=np.float32), non_empty_labels.iloc[:0]
+        return non_empty_patches, non_empty_labels
+
+    monkeypatch.setattr(train, "load_slide_patches", load_stub)
+    monkeypatch.setattr(train, "resolve_device", _forbidden)
+    monkeypatch.setattr(train, "build_model", _forbidden)
+
+    with pytest.raises(StageValidationError, match="cnn_fold_training"):
+        train.train_one_fold(["train"], "held", _fold_labels(), cfg=_fold_cfg())
+
+
+@pytest.mark.parametrize("empty_subject", ["train", "held"])
+def test_rf_fold_empty_member_fails_before_estimator(
+    monkeypatch, empty_subject
+) -> None:
+    non_empty_patches = np.ones((1, 3, 4, 4), dtype=np.float32)
+    non_empty_labels = _fold_labels().iloc[[0]].reset_index(drop=True)
+
+    def load_stub(slide_id, *_args, **_kwargs):
+        if slide_id == empty_subject:
+            return np.zeros((0, 3, 4, 4), dtype=np.float32), non_empty_labels.iloc[:0]
+        return non_empty_patches, non_empty_labels
+
+    monkeypatch.setattr(benchmark, "load_slide_patches", load_stub)
+    monkeypatch.setattr(benchmark, "train_eval_rf_baseline", _forbidden)
+
+    with pytest.raises(StageValidationError, match="rf_fold_training"):
+        benchmark.run_rf_loso_fold(
+            ["train"], "held", _fold_labels(), fold=0, cfg=_fold_cfg()
+        )
+
+
+class _ForbiddenPredictionModel:
+    def eval(self):
+        return _forbidden()
+
+
+@pytest.mark.parametrize(
+    ("patch_array", "batch_size", "subject"),
+    [
+        (np.zeros((0, 3, 4, 4), dtype=np.float32), 2, "NCHW patch batch"),
+        (np.ones((1, 3, 4, 4), dtype=np.float32), 0, "batch size"),
+    ],
+)
+def test_predict_rejects_empty_batch_before_device_or_model(
+    monkeypatch, patch_array, batch_size, subject
+) -> None:
+    monkeypatch.setattr(evaluation, "resolve_device", _forbidden)
+
+    with pytest.raises(StageValidationError, match=subject):
+        evaluation.predict_cnn(
+            _ForbiddenPredictionModel(), patch_array, batch_size=batch_size
+        )
+
+
+def test_rf_public_training_rejects_empty_before_radiomics_or_estimator(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(evaluation, "radiomics_from_patches", _forbidden)
+    monkeypatch.setattr(evaluation, "RandomForestClassifier", _forbidden)
+
+    with pytest.raises(StageValidationError, match="rf_training"):
+        evaluation.train_eval_rf_baseline(
+            np.zeros((0, 3, 4, 4), dtype=np.float32),
+            _fold_labels().iloc[:0],
+            np.ones((1, 3, 4, 4), dtype=np.float32),
+            _fold_labels().iloc[[0]],
+            cfg=_fold_cfg(),
+        )
