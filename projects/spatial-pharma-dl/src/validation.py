@@ -268,25 +268,23 @@ def _admission_dict(record: SlideAdmission) -> dict[str, str | None]:
 
 def _safe_received(value: object) -> str:
     """Render bounded validation evidence without invoking user-defined reprs."""
-    if value is None or isinstance(value, (bool, float)):
+    if value is None or type(value) in (bool, float):
         return repr(value)
-    if isinstance(value, int):
+    if type(value) is int:
         if value.bit_length() > 4096:
             return "<oversized integer>"
         return repr(value)
-    if isinstance(value, str):
+    if type(value) is str:
         rendered = repr(value)
         return rendered if len(rendered) <= 160 else f"{rendered[:157]}..."
-    if isinstance(value, Path):
+    if type(value) in (Path, type(Path())):
         return "<path>"
-    if isinstance(value, (list, tuple)):
+    if type(value) in (list, tuple):
         if len(value) > 12:
             return f"<{type(value).__name__} length={len(value)}>"
         return "[" + ", ".join(_safe_received(item) for item in value) + "]"
-    if isinstance(value, Mapping):
+    if type(value) is dict:
         return f"<mapping length={len(value)}>"
-    if isinstance(value, Collection):
-        return f"<{type(value).__name__} length={len(value)}>"
     return f"<{type(value).__name__}>"
 
 
