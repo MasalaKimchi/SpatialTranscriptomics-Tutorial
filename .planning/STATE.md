@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-07-17T06:54:10.547Z"
-last_activity: 2026-07-17 -- Phase 2 planning complete
+status: verifying
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-07-17T07:02:41.801Z"
+last_activity: 2026-07-17
 progress:
   total_phases: 10
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 7
-  completed_plans: 6
-  percent: 10
+  completed_plans: 7
+  percent: 20
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 ## Current Position
 
 Phase: 2 (Validated Run and Cohort Admission) — VERIFYING
-Plan: 3 of 3
-Status: Ready to execute
-Last activity: 2026-07-17 -- Phase 2 planning complete
+Plan: 4 of 4
+Status: Phase complete — ready for verification
+Last activity: 2026-07-17
 
 Progress: [██░░░░░░░░] 20%
 
@@ -36,7 +36,7 @@ Progress: [██░░░░░░░░] 20%
 
 **Velocity:**
 
-- Total plans completed: 6
+- Total plans completed: 7
 - Average duration: 7 min
 - Total execution time: 0.7 hours
 
@@ -45,11 +45,11 @@ Progress: [██░░░░░░░░] 20%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 3 | 20 min | 7 min |
-| 02 | 3 | 23 min | 8 min |
+| 02 | 4 | 30 min | 8 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 7 min, 6 min, 6 min, 7 min, 10 min
+- Last 5 plans: 6 min, 6 min, 7 min, 10 min, 7 min
 - Trend: Stable with broader Phase 2 boundary coverage
 
 *Updated after each plan completion*
@@ -59,6 +59,7 @@ Progress: [██░░░░░░░░] 20%
 | Phase 02 P01 | 6 min | 2 tasks | 4 files |
 | Phase 02 P02 | 7min | 3 tasks | 6 files |
 | Phase 02 P03 | 10min | 3 tasks | 11 files |
+| Phase 02 P04 | 7min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: LOSO entry points require two unique non-empty slides but no class-support policy. — Phase 2 owns cardinality while Phase 6 owns class viability and unseen-class coverage.
 - [Phase 02]: Every public stage rechecks cardinality after cohort admission. — Direct callers and partially admitted downstream subsets must fail before expensive work.
 - [Phase 02]: Zero-row alignment reports cardinality only. — Compound-key diagnosis and repair remain explicitly owned by Phase 3.
+- [Phase 02]: Configuration admits exact safe built-in types before caller value operations. — Hostile subclasses and arbitrary mappings must fail deterministically without executing overrides.
+- [Phase 02]: Only cfg=None loads foundation and report defaults. — Every supplied mapping must resolve before cache, device, model, dataframe, output, or writer work.
 
 ### Pending Todos
 
@@ -102,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T06:13:18.845Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-07-17T07:02:41.798Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None
