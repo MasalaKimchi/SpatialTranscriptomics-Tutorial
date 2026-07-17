@@ -39,7 +39,7 @@ Exactly 20 high-priority updates are committed to this milestone.
 ### Scientific Labels, Verification, and Environment
 
 - [ ] **LABEL-01**: Heuristic domain labels use versioned explicit gene rules and enrichment evidence, store confidence and provenance, and abstain instead of forcing low-confidence assignments.
-- [ ] **TEST-01**: Fast CI runs Ruff, unit tests, artifact round trips, synthetic AnnData integration, model/fold smoke tests, and notebook structural checks, while network/full-cohort execution remains an explicit slow tier.
+- [x] **TEST-01**: Fast CI runs Ruff, unit tests, artifact round trips, synthetic AnnData integration, model/fold smoke tests, and notebook structural checks, while network/full-cohort execution remains an explicit slow tier.
 - [ ] **ENV-01**: Python support and dependency declarations agree across `pyproject.toml`, requirements files, Conda configuration, and documentation, with a reproducible locked/tested environment contract.
 
 ## v2 Requirements
@@ -91,10 +91,11 @@ Exactly 20 high-priority updates are committed to this milestone.
 | IMG-02 | Phase 8 | Pending |
 | IMG-03 | Phase 8 | Pending |
 | LABEL-01 | Phase 9 | Pending |
-| TEST-01 | Phase 1 | Pending |
+| TEST-01 | Phase 1 | Complete |
 | ENV-01 | Phase 10 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 20 total
 - Mapped to phases: 20
 - Unmapped: 0 ✓

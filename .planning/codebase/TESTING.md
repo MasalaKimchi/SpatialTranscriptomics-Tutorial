@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 1c2d0739bbb2b724a4eaef1cdbb16d865bff7580
+last_mapped_commit: a687bd5
 mapping_focus: quality
 ---
 
@@ -8,19 +8,21 @@ mapping_focus: quality
 ## Current Test Suite
 
 - Automated tests live only under `projects/spatial-pharma-dl/tests/`; the root tutorial helpers and notebooks do not have a dedicated test directory.
-- The suite uses pytest-style functions and plain `assert`, with NumPy assertions for numerical arrays; there are no pytest fixtures, parametrization, markers, or shared `conftest.py`.
+- The suite uses pytest-style functions and plain `assert`, with NumPy assertions for numerical arrays; shared tier enforcement and deterministic factories live in `projects/spatial-pharma-dl/tests/conftest.py`.
 - `projects/spatial-pharma-dl/tests/test_core_refactors.py` contains three regression tests for lazy imports, idempotent notebook patching, and Grad-CAM hook cleanup.
 - `projects/spatial-pharma-dl/tests/test_foundation.py` contains five tests for embedding normalization, probe behavior, encoder registry independence, slide preprocessing, and nested leave-one-slide-out classification.
 - Test doubles are small in-memory Torch modules such as `MeanEncoder` and `_TinyCamModel`; synthetic NumPy/Pandas data avoids network access and real slide downloads.
-- Tests mutate `sys.path` to import the uninstalled pharma `src` package, mirroring the production bootstrap pattern rather than validating an installed distribution.
+- `conftest.py` centralizes the repository and pharma import paths needed for the uninstalled nested `src` package.
 - The suite is deterministic: synthetic random data uses `np.random.default_rng()` with explicit seeds and CPU-sized models.
-- At mapped commit `1c2d0739bbb2b724a4eaef1cdbb16d865bff7580`, `python -m pytest -p no:cacheprovider projects/spatial-pharma-dl/tests -q` completes with 8 passing tests.
+- Bare `python -m pytest -q` defaults to the `offline` primary tier and completes with 18 passing tests after Plan 01-01.
+- `test_verification_contract.py` proves tier classification, offline environment flags, socket denial, and default deselection of opt-in evidence.
+- `test_fixture_contracts.py` proves fresh deterministic AnnData, cohort, key, fold, image, and artifact adversary factories confined to pytest temporary paths.
 - The current environment emits two dependency warnings during collection: Pandas reports outdated local `numexpr` and `bottleneck` versions; these warnings do not fail the suite.
 
 ## Static and Structural Checks
 
 - `ruff check utils scripts projects/spatial-pharma-dl/src projects/spatial-pharma-dl/scripts projects/spatial-pharma-dl/tests` passes at the mapped commit.
-- `pyproject.toml` does not declare pytest, Ruff, coverage, mypy, or formatting configuration, so developer tool behavior depends on installed tool defaults.
+- `pyproject.toml` declares strict `offline`, `notebook_smoke`, `network`, and `full_cohort` pytest markers plus the repository's Python 3.11 Ruff source/rule scope.
 - No GitHub Actions workflow, pre-commit configuration, tox/nox setup, Makefile, or checked-in CI command was found.
 - There is no configured coverage report or minimum threshold, so the repository cannot currently quantify line or branch coverage.
 - There is no static type-checking gate; type hints improve readability but are not verified by mypy or pyright.
@@ -45,7 +47,7 @@ mapping_focus: quality
 - `projects/spatial-pharma-dl/src/models.py` and `projects/spatial-pharma-dl/src/train.py` lack tests for supported backbones, invalid model configuration, checkpoint loading, multitask losses, early stopping, sampling, and LOSO orchestration.
 - `projects/spatial-pharma-dl/src/eval.py` lacks direct metric edge-case tests, RF baseline tests, prediction batching tests, and benchmark-report persistence tests.
 - `projects/spatial-pharma-dl/src/benchmark.py` and `projects/spatial-pharma-dl/scripts/run_pipeline.py` have no orchestration tests or mocked end-to-end smoke test.
-- Real foundation backends, Hugging Face authentication failures, model-cache behavior, unsupported dependency combinations, and offline execution are not exercised.
+- Real foundation backends, Hugging Face authentication failures, model-cache behavior, and unsupported dependency combinations are not exercised; offline socket/model-hub denial is now enforced and tested.
 - Root tutorial notebooks are not executed in order, so cache handoffs, downloaded data, plots, optional exercises, and compatibility across Scanpy/Squidpy versions remain unverified.
 - No tests cover `scripts/generate_gallery_figures.py` or the complete behavior of the three notebook-builder scripts.
 - Security-sensitive patch cache loading in `projects/spatial-pharma-dl/src/patches.py` still uses pickle-backed NumPy metadata and is not tested against malformed or untrusted cache files.
