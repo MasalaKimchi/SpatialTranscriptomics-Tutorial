@@ -224,8 +224,8 @@ def nested_loso_classification(
         unique_non_empty,
         stage="nested_loso_admission",
         subject="unique non-empty slide IDs",
-        minimum=2,
-        guidance="Provide at least two distinct slides for nested LOSO.",
+        minimum=3,
+        guidance="Provide at least three distinct slides for nested LOSO.",
     )
     for slide_id in slide_ids:
         embeddings, labels = slide_data[slide_id]

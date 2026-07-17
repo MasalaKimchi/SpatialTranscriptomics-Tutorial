@@ -5,9 +5,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
 
 import pandas as pd
 import yaml
+from requests.exceptions import RequestException
 
 from . import bootstrap  # noqa: F401 — ensures repo root is on sys.path
 from .validation import (
@@ -20,6 +22,10 @@ from utils import st_helpers as st
 
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+
+
+class SourceAcquisitionError(RuntimeError):
+    """A documented remote dataset acquisition failure safe for admission policy."""
 
 
 def load_config(path: Path | None = None) -> dict[str, Any]:
@@ -192,7 +198,12 @@ def preprocess_cohort(
             paths[sid] = out
             continue
         print(f"Loading and preprocessing: {sid}")
-        adata = st.load_visium_sample(sid)
+        try:
+            adata = st.load_visium_sample(sid)
+        except (ConnectionError, TimeoutError, URLError, RequestException) as exc:
+            raise SourceAcquisitionError(
+                f"Could not acquire the configured public slide {sid}."
+            ) from exc
         adata = preprocess_slide(adata, sid, cfg=cfg)
         paths[sid] = save_slide(adata, sid)
         print(

@@ -140,14 +140,13 @@ def train_one_fold(
     X_train, lab_train = _maybe_subsample(X_train, lab_train, quick_max)
     X_val, lab_val = _maybe_subsample(X_val, lab_val, quick_max)
 
+    cls_col = classification_column(cfg)
+    reg_cols = regression_columns(lab_train, cfg)
     dev = resolve_device(device or train_cfg.get("device", "auto"))
     device = str(dev)
     model_name = train_cfg.get("model", "resnet18")
     pretrained = bool(train_cfg.get("pretrained", True))
-    cls_col = classification_column(cfg)
     print(f"  Device: {device_label(dev)} | backbone: {model_name} | cls={cls_col}")
-
-    reg_cols = regression_columns(lab_train, cfg)
 
     # Global TME classes — stable across slides (no per-slide cluster collision)
     n_classes = len(tme_class_names(cfg))

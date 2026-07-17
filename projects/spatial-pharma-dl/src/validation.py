@@ -88,11 +88,15 @@ class ConfigValidationError(PharmaValidationError):
         self.issues = tuple(issues)
         lines = [f"Experiment configuration has {len(self.issues)} issue(s):"]
         lines.extend(
-            f"- {issue.path}: received {issue.received!r}; expected "
+            f"- {issue.path}: received {_safe_received(issue.received)}; expected "
             f"{issue.expected}. {issue.guidance}"
             for issue in self.issues
         )
         super().__init__("\n".join(lines))
+
+
+class CohortAdmissionInputError(PharmaValidationError):
+    """Raised when injected admission evidence is malformed or non-canonical."""
 
 
 class CohortAdmissionError(PharmaValidationError):
@@ -262,6 +266,30 @@ def _admission_dict(record: SlideAdmission) -> dict[str, str | None]:
     }
 
 
+def _safe_received(value: object) -> str:
+    """Render bounded validation evidence without invoking user-defined reprs."""
+    if value is None or isinstance(value, (bool, float)):
+        return repr(value)
+    if isinstance(value, int):
+        if value.bit_length() > 4096:
+            return "<oversized integer>"
+        return repr(value)
+    if isinstance(value, str):
+        rendered = repr(value)
+        return rendered if len(rendered) <= 160 else f"{rendered[:157]}..."
+    if isinstance(value, Path):
+        return "<path>"
+    if isinstance(value, (list, tuple)):
+        if len(value) > 12:
+            return f"<{type(value).__name__} length={len(value)}>"
+        return "[" + ", ".join(_safe_received(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        return f"<mapping length={len(value)}>"
+    if isinstance(value, Collection):
+        return f"<{type(value).__name__} length={len(value)}>"
+    return f"<{type(value).__name__}>"
+
+
 class _Issues:
     def __init__(self) -> None:
         self.values: list[ValidationIssue] = []
@@ -304,7 +332,7 @@ def _mapping(
             f"Set {path} to a YAML mapping with the documented fields.",
         )
         return None
-    bad_keys = sorted((key for key in value if not isinstance(key, str)), key=repr)
+    bad_keys = [key for key in value if not isinstance(key, str)]
     for key in bad_keys:
         issues.add(
             f"{path}.<key>",
@@ -369,7 +397,10 @@ def _number(
     valid_type = isinstance(value, int if integer else (int, float)) and not isinstance(
         value, bool
     )
-    finite = valid_type and math.isfinite(float(value))
+    finite = valid_type and (
+        (not isinstance(value, int) or value.bit_length() <= 4096)
+        and (not isinstance(value, float) or math.isfinite(value))
+    )
     in_range = finite
     if in_range and minimum is not None:
         in_range = value > minimum if strict_minimum else value >= minimum
@@ -690,7 +721,17 @@ def _validate_evaluation(root: Mapping[str, Any], issues: _Issues) -> None:
 def _validate_json_tree(value: object, path: str, issues: _Issues) -> object:
     if isinstance(value, Path):
         return value.as_posix()
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int):
+        if value.bit_length() > 4096:
+            issues.add(
+                path,
+                value,
+                "a bounded JSON integer",
+                f"Replace the oversized integer at {path}.",
+            )
+            return None
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
@@ -702,10 +743,10 @@ def _validate_json_tree(value: object, path: str, issues: _Issues) -> object:
         return [_validate_json_tree(item, f"{path}[{index}]", issues) for index, item in enumerate(value)]
     if isinstance(value, Mapping):
         result: dict[str, object] = {}
-        for key in sorted(value, key=repr):
+        for key in value:
             if not isinstance(key, str):
                 issues.add(f"{path}.<key>", key, "a string JSON object key", "Replace the non-string key.")
-                continue
+        for key in sorted(key for key in value if isinstance(key, str)):
             result[key] = _validate_json_tree(value[key], f"{path}.{key}", issues)
         return result
     issues.add(
@@ -782,8 +823,47 @@ def admit_run(
     resolved = resolve_config(cfg)
     normalized = resolved.to_dict()
     allow_partial = normalized["cohort_policy"]["allow_partial"]
-    available = None if available_slide_ids is None else set(available_slide_ids)
-    failure_reasons = dict(failures or {})
+    configured_ids = {
+        slide_id
+        for cohort in ("oncology", "external", "benchmark")
+        for slide_id in normalized["cohorts"][cohort]
+    }
+    if available_slide_ids is None:
+        available = None
+    else:
+        if isinstance(available_slide_ids, (str, bytes)):
+            raise CohortAdmissionInputError(
+                "available_slide_ids must be a collection of configured string slide IDs."
+            )
+        available = set(available_slide_ids)
+        invalid_available = [
+            item
+            for item in available
+            if not isinstance(item, str) or item not in configured_ids
+        ]
+        if invalid_available:
+            raise CohortAdmissionInputError(
+                "available_slide_ids contains an unknown or non-string slide ID."
+            )
+    failure_reasons: dict[str, str] = {}
+    if failures is not None:
+        if not isinstance(failures, Mapping):
+            raise CohortAdmissionInputError(
+                "failures must map configured string slide IDs to string details."
+            )
+        for slide_id, detail in failures.items():
+            if not isinstance(slide_id, str) or slide_id not in configured_ids:
+                raise CohortAdmissionInputError(
+                    "failures contains an unknown or non-string slide ID."
+                )
+            if not isinstance(detail, str):
+                raise CohortAdmissionInputError(
+                    "failure details must be strings; arbitrary objects are not accepted."
+                )
+            failure_reasons[slide_id] = (
+                "Source acquisition failed for the configured slide; verify "
+                "network access and the public dataset identifier before retrying."
+            )
 
     configured: list[SlideAdmission] = []
     included: list[SlideAdmission] = []

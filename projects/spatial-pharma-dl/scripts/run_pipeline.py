@@ -19,13 +19,14 @@ sys.path.insert(0, str(PHARMA))
 import src.bootstrap  # noqa: E402,F401
 
 from src.data import (  # noqa: E402
+    SourceAcquisitionError,
     available_processed_slide_ids,
     cohort_slide_ids,
     load_config,
     pharma_outputs_dir,
     preprocess_cohort,
 )
-from src.validation import admit_run, resolve_config  # noqa: E402
+from src.validation import CohortAdmissionError, admit_run, resolve_config  # noqa: E402
 
 
 def _load_stages() -> SimpleNamespace:
@@ -71,22 +72,27 @@ def _need_patch_rebuild(
 
 def _curate_sources(cfg: dict, slide_ids: list[str]):
     """Attempt remote sources and finalize strict or partial admission once."""
-    allow_partial = cfg["cohort_policy"]["allow_partial"]
     successful: list[str] = []
     failures: dict[str, str] = {}
+    first_source_error: SourceAcquisitionError | None = None
     for slide_id in slide_ids:
         try:
             preprocess_cohort([slide_id], cfg=cfg)
             successful.append(slide_id)
-        except Exception:
+        except SourceAcquisitionError as exc:
+            if first_source_error is None:
+                first_source_error = exc
             failures[slide_id] = "Source loading failed for the configured slide."
-            if not allow_partial:
-                return admit_run(cfg, failures=failures)
-    return admit_run(
-        cfg,
-        available_slide_ids=successful,
-        failures=failures,
-    )
+    try:
+        return admit_run(
+            cfg,
+            available_slide_ids=successful,
+            failures=failures,
+        )
+    except CohortAdmissionError as exc:
+        if first_source_error is not None:
+            raise exc from first_source_error
+        raise
 
 
 def main() -> None:

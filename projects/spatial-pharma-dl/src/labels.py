@@ -197,7 +197,6 @@ def build_labels_cohort(
         subject="admitted slide sequence",
         guidance="Admit at least one slide before generating cohort labels.",
     )
-    out_dir = pharma_outputs_dir()
     frames = []
     domain_rows = []
 
@@ -209,8 +208,6 @@ def build_labels_cohort(
             subject=f"label rows for slide {sid}",
             guidance="Retain at least one usable labeled spot for every admitted slide.",
         )
-        path = out_dir / f"labels_{sid.replace(' ', '_')}.parquet"
-        labels.to_parquet(path, index=False)
         frames.append(labels)
         for cluster in labels["cluster"].unique():
             domain_rows.append(
@@ -225,8 +222,6 @@ def build_labels_cohort(
                     ].iloc[0],
                 }
             )
-        print(f"Wrote {path} ({len(labels)} spots)")
-
     require_non_empty(
         frames,
         stage="cohort_label_generation",
@@ -240,6 +235,11 @@ def build_labels_cohort(
         subject="combined cohort label rows",
         guidance="Retain at least one usable labeled spot in the admitted cohort.",
     )
+    out_dir = pharma_outputs_dir()
+    for sid, frame in zip(sample_ids, frames, strict=True):
+        path = out_dir / f"labels_{sid.replace(' ', '_')}.parquet"
+        frame.to_parquet(path, index=False)
+        print(f"Wrote {path} ({len(frame)} spots)")
     if domain_rows:
         pd.DataFrame(domain_rows).to_csv(
             out_dir / "domain_annotations.csv", index=False
