@@ -142,6 +142,7 @@ def build_labels_for_slide(
         adata,
         sample_id,
         stage="slide_label_generation",
+        require_slide_id=True,
     )
     class_map = tme_class_to_id(cfg)
 

@@ -150,7 +150,12 @@ def _extract_spot_patches(
     cfg: dict[str, Any],
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Extract normalized, resized patches for all spots on a slide."""
-    validate_anndata_spot_identity(adata, slide_id, stage="patch_extraction")
+    validate_anndata_spot_identity(
+        adata,
+        slide_id,
+        stage="patch_extraction",
+        require_slide_id=True,
+    )
     patch_cfg = cfg["patches"]
     min_patch = patch_cfg["min_patch_px"]
     out_size = patch_cfg["output_size"]

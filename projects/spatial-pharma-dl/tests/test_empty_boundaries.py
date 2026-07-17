@@ -124,7 +124,12 @@ def test_label_later_empty_slide_publishes_no_partial_cohort(monkeypatch) -> Non
 def test_label_slide_generation_rejects_zero_rows(monkeypatch) -> None:
     empty_adata = SimpleNamespace(
         obs_names=pd.Index([], dtype=object),
-        obs=pd.DataFrame({"clusters": pd.Series(dtype=object)}),
+        obs=pd.DataFrame(
+            {
+                "clusters": pd.Series(dtype=object),
+                "slide_id": pd.Series(dtype=object),
+            }
+        ),
     )
     fake_scanpy = SimpleNamespace(
         tl=SimpleNamespace(rank_genes_groups=lambda *_args, **_kwargs: None),
@@ -179,7 +184,10 @@ def test_patch_empty_coordinates_fail_before_image_or_stack(monkeypatch) -> None
 
     with pytest.raises(StageValidationError, match="patch_extraction") as caught:
         patches._extract_spot_patches(
-            SimpleNamespace(obs_names=pd.Index([], dtype=object)),
+            SimpleNamespace(
+                obs_names=pd.Index([], dtype=object),
+                obs=pd.DataFrame({"slide_id": pd.Series(dtype=object)}),
+            ),
             "slide_a",
             np.eye(2, 3),
             _patch_cfg(),

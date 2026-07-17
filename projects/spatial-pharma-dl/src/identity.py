@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import json
 from typing import Any, Sequence
 
 import pandas as pd
@@ -14,6 +15,7 @@ from .validation import PharmaValidationError
 KEY_COLUMNS = ("slide_id", "spot_id")
 RESERVED_COLUMNS = ("_label_source_row", "_patch_source_row")
 _SAMPLE_LIMIT = 5
+_SAMPLE_COMPONENT_LIMIT = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +42,8 @@ class IdentityValidationError(PharmaValidationError):
             )
             if issue.sample_keys:
                 rendered = ", ".join(
-                    f"({slide_id}, {spot_id})"
+                    f"({_render_key_component(slide_id)}, "
+                    f"{_render_key_component(spot_id)})"
                     for slide_id, spot_id in issue.sample_keys
                 )
                 detail += f"; sample_keys={rendered}"
@@ -55,8 +58,36 @@ class IdentityValidationError(PharmaValidationError):
 
 
 def _type_label(value: object) -> str:
-    value_type = type(value)
-    return f"{value_type.__module__}.{value_type.__qualname__}"
+    """Return inert evidence without reading caller-controlled class attributes."""
+    if value is None:
+        return "builtins.NoneType"
+    if type(value) is bool:
+        return "builtins.bool"
+    if type(value) is int:
+        return "builtins.int"
+    if type(value) is float:
+        return "builtins.float"
+    if type(value) is str:
+        return "builtins.str"
+    if type(value) is bytes:
+        return "builtins.bytes"
+    if type(value) is list:
+        return "builtins.list"
+    if type(value) is tuple:
+        return "builtins.tuple"
+    if type(value) is dict:
+        return "builtins.dict"
+    return "non_builtin_object"
+
+
+def _render_key_component(value: str) -> str:
+    """Render one admitted exact string as bounded, single-line JSON evidence."""
+    prefix = value[:_SAMPLE_COMPONENT_LIMIT]
+    rendered = json.dumps(prefix, ensure_ascii=True)
+    omitted = len(value) - len(prefix)
+    if omitted:
+        rendered = f'{rendered[:-1]}...<+{omitted} chars>"'
+    return rendered
 
 
 def _parameter_issue(name: str, value: object) -> IdentityIssue | None:
@@ -367,10 +398,25 @@ def validate_anndata_spot_identity(
     slide_id: str,
     *,
     stage: str,
+    require_slide_id: bool = False,
 ) -> None:
-    """Admit exact unique AnnData observation names before row construction."""
+    """Admit exact AnnData compound identity before row construction."""
     stage = _validate_parameter("stage", stage, stage_for_error="identity_parameters")
     slide_id = _validate_parameter("slide_id", slide_id, stage_for_error=stage)
+    if type(require_slide_id) is not bool:
+        raise IdentityValidationError(
+            stage=stage,
+            issues=(
+                IdentityIssue(
+                    code="invalid_type",
+                    side="parameters",
+                    count=1,
+                    sample_rows=(
+                        (0, "require_slide_id", _type_label(require_slide_id)),
+                    ),
+                ),
+            ),
+        )
     obs_names = adata.obs_names
     invalid: list[tuple[int, str, str]] = []
     blank: list[tuple[int, str, str]] = []
@@ -402,6 +448,71 @@ def validate_anndata_spot_identity(
                 sample_rows=tuple(blank[:_SAMPLE_LIMIT]),
             )
         )
+    obs = getattr(adata, "obs", None)
+    has_slide_id = (
+        obs is not None
+        and hasattr(obs, "columns")
+        and "slide_id" in tuple(obs.columns)
+    )
+    if require_slide_id and not has_slide_id:
+        issues.append(
+            IdentityIssue(code="missing_column", side="anndata", count=1)
+        )
+    if has_slide_id:
+        persisted_invalid: list[tuple[int, str, str]] = []
+        persisted_blank: list[tuple[int, str, str]] = []
+        wrong_slide: list[tuple[str, str]] = []
+        wrong_slide_count = 0
+        persisted = obs["slide_id"]
+        if len(persisted) != len(obs_names):
+            issues.append(
+                IdentityIssue(
+                    code="cardinality_mismatch",
+                    side="anndata",
+                    count=abs(len(persisted) - len(obs_names)),
+                )
+            )
+        else:
+            for row in range(len(persisted)):
+                value = persisted.iloc[row]
+                if type(value) is not str:
+                    persisted_invalid.append(
+                        (row, "slide_id", _type_label(value))
+                    )
+                elif not value.strip():
+                    persisted_blank.append((row, "slide_id", "builtins.str"))
+                elif value != slide_id:
+                    wrong_slide_count += 1
+                    spot_id = obs_names[row]
+                    if type(spot_id) is str:
+                        wrong_slide.append((value, spot_id))
+            if persisted_invalid:
+                issues.append(
+                    IdentityIssue(
+                        code="invalid_type",
+                        side="anndata",
+                        count=len(persisted_invalid),
+                        sample_rows=tuple(persisted_invalid[:_SAMPLE_LIMIT]),
+                    )
+                )
+            if persisted_blank:
+                issues.append(
+                    IdentityIssue(
+                        code="blank_value",
+                        side="anndata",
+                        count=len(persisted_blank),
+                        sample_rows=tuple(persisted_blank[:_SAMPLE_LIMIT]),
+                    )
+                )
+            if wrong_slide_count:
+                issues.append(
+                    IdentityIssue(
+                        code="wrong_slide",
+                        side="anndata",
+                        count=wrong_slide_count,
+                        sample_keys=_sample(wrong_slide),
+                    )
+                )
     if not issues:
         duplicate = _duplicate_issue(tuple(admitted), "anndata")
         if duplicate is not None:

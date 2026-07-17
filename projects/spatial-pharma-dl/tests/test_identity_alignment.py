@@ -152,6 +152,165 @@ def test_anndata_identity_rejects_invalid_names_before_row_construction():
         validate_anndata_spot_identity(adata, "slide_a", stage="producer")
 
 
+@pytest.mark.parametrize(
+    "persisted_slide_ids",
+    [["slide_b", "slide_b"], ["slide_a", "slide_b"], ["slide_a", "   "]],
+)
+def test_anndata_identity_rejects_invalid_persisted_slide_identity(
+    persisted_slide_ids,
+):
+    adata = SimpleNamespace(
+        obs_names=pd.Index(["spot_a", "spot_b"], dtype=object),
+        obs=pd.DataFrame({"slide_id": persisted_slide_ids}),
+    )
+
+    with pytest.raises(IdentityValidationError) as caught:
+        validate_anndata_spot_identity(
+            adata,
+            "slide_a",
+            stage="persisted_producer",
+            require_slide_id=True,
+        )
+
+    assert {issue.code for issue in caught.value.issues} & {
+        "wrong_slide",
+        "blank_value",
+    }
+
+
+def test_raw_anndata_without_persisted_slide_identity_remains_compatible():
+    adata = SimpleNamespace(
+        obs_names=pd.Index(["spot_a", "spot_b"], dtype=object),
+        obs=pd.DataFrame(index=["spot_a", "spot_b"]),
+    )
+
+    validate_anndata_spot_identity(adata, "slide_a", stage="raw_source")
+
+    with pytest.raises(IdentityValidationError, match="missing_column"):
+        validate_anndata_spot_identity(
+            adata,
+            "slide_a",
+            stage="persisted_source",
+            require_slide_id=True,
+        )
+
+
+def test_hostile_metaclass_type_evidence_executes_no_hooks():
+    calls: list[str] = []
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name in {"__module__", "__name__", "__qualname__"}:
+                calls.append(name)
+                raise AssertionError("metaclass hook executed")
+            return super().__getattribute__(name)
+
+    class HostileValue(metaclass=HostileMeta):
+        def __repr__(self):
+            calls.append("repr")
+            raise AssertionError("repr hook executed")
+
+    hostile = HostileValue()
+    for hostile_side in ("labels", "metadata"):
+        tables = {
+            "labels": pd.DataFrame(
+                {"slide_id": ["slide_a"], "spot_id": ["p0"]}
+            ),
+            "metadata": pd.DataFrame(
+                {"slide_id": ["slide_a"], "spot_id": ["p0"]}
+            ),
+        }
+        tables[hostile_side]["spot_id"] = pd.Series([hostile], dtype=object)
+        with pytest.raises(IdentityValidationError, match="invalid_type"):
+            align_labels_with_metadata(
+                tables["labels"],
+                tables["metadata"],
+                stage="hostile_cell",
+            )
+    with pytest.raises(IdentityValidationError, match="invalid_type"):
+        align_labels_with_metadata(
+            pd.DataFrame({"slide_id": ["slide_a"], "spot_id": ["p0"]}),
+            pd.DataFrame({"slide_id": ["slide_a"], "spot_id": ["p0"]}),
+            stage=hostile,
+        )
+    with pytest.raises(IdentityValidationError, match="invalid_type"):
+        validate_anndata_spot_identity(
+            SimpleNamespace(obs_names=pd.Index([hostile], dtype=object)),
+            "slide_a",
+            stage="hostile_obs",
+        )
+    assert calls == []
+
+
+def test_persisted_slide_identity_rejects_null_and_string_subclass_without_hooks():
+    calls: list[str] = []
+
+    class HostileString(str):
+        def strip(self, *_args, **_kwargs):
+            calls.append("strip")
+            raise AssertionError("strip hook executed")
+
+        def __repr__(self):
+            calls.append("repr")
+            raise AssertionError("repr hook executed")
+
+    adata = SimpleNamespace(
+        obs_names=pd.Index(["spot_a", "spot_b"], dtype=object),
+        obs=pd.DataFrame(
+            {"slide_id": pd.Series([None, HostileString("slide_a")], dtype=object)}
+        ),
+    )
+
+    with pytest.raises(IdentityValidationError) as caught:
+        validate_anndata_spot_identity(
+            adata,
+            "slide_a",
+            stage="persisted_types",
+            require_slide_id=True,
+        )
+
+    assert caught.value.issues[0].code == "invalid_type"
+    assert caught.value.issues[0].count == 2
+    assert calls == []
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "unmatched", "cross_slide"])
+def test_key_diagnostics_escape_controls_and_bound_long_unicode(defect):
+    hostile_id = "line\n\t\x00" + "한🚀" * 100_000
+    labels = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a"],
+            "spot_id": [hostile_id, "p1"],
+        }
+    )
+    metadata = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a"],
+            "spot_id": [hostile_id, "p1"],
+        }
+    )
+    if defect == "duplicate":
+        labels.loc[1, "spot_id"] = hostile_id
+    elif defect == "unmatched":
+        metadata.loc[0, "spot_id"] = "metadata-only"
+    else:
+        metadata.loc[0, "slide_id"] = "slide_b"
+
+    with pytest.raises(IdentityValidationError) as caught:
+        align_labels_with_metadata(labels, metadata, stage="bounded")
+
+    message = str(caught.value)
+    assert "line\n" not in message
+    assert "\\n\\t\\u0000" in message
+    assert len(message) < 2_000
+    assert any(
+        hostile_id in component
+        for issue in caught.value.issues
+        for key in issue.sample_keys
+        for component in key
+    )
+
+
 def test_public_alignment_facade_preserves_dataframe_contract(
     key_adversary_factory,
 ):
@@ -186,6 +345,35 @@ def test_label_producer_rejects_anndata_identity_before_scientific_work(monkeypa
         label_module.build_labels_for_slide("slide_a", cfg={"seed": 0})
 
 
+@pytest.mark.parametrize(
+    "persisted_slide_ids", [["slide_b", "slide_b"], ["slide_a", "slide_b"]]
+)
+def test_label_producer_rejects_wrong_persisted_slide_before_science(
+    monkeypatch, persisted_slide_ids
+):
+    invalid = SimpleNamespace(
+        obs_names=pd.Index(["spot_a", "spot_b"], dtype=object),
+        obs=pd.DataFrame({"slide_id": persisted_slide_ids}),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("label scientific seam was reached")
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "scanpy",
+        SimpleNamespace(
+            tl=SimpleNamespace(rank_genes_groups=forbidden),
+            get=SimpleNamespace(rank_genes_groups_df=forbidden),
+        ),
+    )
+    monkeypatch.setattr(label_module, "load_slide", lambda _slide_id: invalid)
+    monkeypatch.setattr(label_module, "tme_class_to_id", forbidden)
+
+    with pytest.raises(IdentityValidationError, match="wrong_slide"):
+        label_module.build_labels_for_slide("slide_a", cfg={"seed": 0})
+
+
 def test_patch_producer_rejects_anndata_identity_before_coordinates_or_stack(
     monkeypatch,
 ):
@@ -199,6 +387,32 @@ def test_patch_producer_rejects_anndata_identity_before_coordinates_or_stack(
     monkeypatch.setattr(patch_module.np, "stack", forbidden)
 
     with pytest.raises(IdentityValidationError, match="invalid_type"):
+        patch_module._extract_spot_patches(
+            invalid,
+            "slide_a",
+            np.eye(2, 3),
+            {"patches": {}},
+        )
+
+
+@pytest.mark.parametrize(
+    "persisted_slide_ids", [["slide_b", "slide_b"], ["slide_a", "slide_b"]]
+)
+def test_patch_producer_rejects_wrong_persisted_slide_before_coordinates(
+    monkeypatch, persisted_slide_ids
+):
+    invalid = SimpleNamespace(
+        obs_names=pd.Index(["spot_a", "spot_b"], dtype=object),
+        obs=pd.DataFrame({"slide_id": persisted_slide_ids}),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("patch scientific seam was reached")
+
+    monkeypatch.setattr(patch_module, "coords_hires", forbidden)
+    monkeypatch.setattr(patch_module.st, "get_image", forbidden)
+
+    with pytest.raises(IdentityValidationError, match="wrong_slide"):
         patch_module._extract_spot_patches(
             invalid,
             "slide_a",
