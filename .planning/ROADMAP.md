@@ -82,7 +82,7 @@ This milestone adds a thin reliability spine beneath the existing notebook-first
   3. Interrupted, truncated, stale, wrong-shape, wrong-schema, or incomplete artifacts are rejected by production readers and never promoted as valid results.
   4. Cache, model, table, and manifest publication uses same-filesystem temporary files, validation through the production reader, and atomic replacement with the completed manifest as commit marker.
 
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans executed
 
 ### Phase 5: Safe Cache and Checkpoint Formats
 
@@ -186,7 +186,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 1. Offline Verification Harness | 3/3 | Complete    | 2026-07-17 |
 | 2. Validated Run and Cohort Admission | 4/4 | Complete    | 2026-07-17 |
 | 3. Identity and Adaptive Preprocessing | 3/3 | Complete    | 2026-07-17 |
-| 4. Durable Artifact Contract | 1/3 | In Progress|  |
+| 4. Durable Artifact Contract | 3/3 | In Progress |  |
 | 5. Safe Cache and Checkpoint Formats | 0/TBD | Not started | - |
 | 6. Reproducible Fold Admission | 0/TBD | Not started | - |
 | 7. Leakage-Free Evaluation | 0/TBD | Not started | - |

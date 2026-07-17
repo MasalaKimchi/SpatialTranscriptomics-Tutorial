@@ -3,7 +3,7 @@ phase: 4
 slug: durable-artifact-contract
 status: approved
 nyquist_compliant: true
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-07-17
 ---
 
@@ -36,16 +36,16 @@ created: 2026-07-17
 | 4-02-01 | 02 | 2 | ART-03, ART-04 | T-06 | Processed H5AD and label/domain tables validate lineage, schema, identity, shapes, and completion before reuse | integration | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_adapters.py -k "h5ad or processed or label or domain"` | ✅ | ✅ passed |
 | 4-02-02 | 02 | 2 | ART-03, ART-04 | T-06, T-07 | Patch/index and embedding artifacts reject legacy/stale/wrong-key/shape/dtype/identity payloads before consumer work | integration | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_adapters.py -k "patch or index or embedding"` | ✅ | ✅ passed |
 | 4-02-03 | 02 | 2 | ART-03 | T-02, T-07 | Acquisition regenerates stale/legacy scientific caches while train-only/direct reads fail with guidance and transitive lineage misses | orchestration | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_adapters.py projects/spatial-pharma-dl/tests/test_artifact_orchestration.py -k "regenerate or train_only or lineage or stale"` | ✅ | ✅ passed |
-| 4-03-01 | 03 | 3 | ART-03, ART-04 | T-06, T-08 | Checkpoints and benchmark/report tables validate contract/state/table schemas without claiming Phase 5 deserialization safety | integration | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_adapters.py -k "checkpoint or benchmark or report"` | ❌ W0 | ⬜ pending |
-| 4-03-02 | 03 | 3 | ART-04 | T-04, T-08 | Cohort/preprocessing/experiment manifests, summaries, training history, and foundation result tables publish atomically with unchanged inner schemas and no reader/writer bypass | orchestration/static | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_orchestration.py -k "manifest or summary or training_history or foundation_result or bypass or pipeline"` | ❌ W0 | ⬜ pending |
-| 4-03-03 | 03 | 3 | ART-03, ART-04 | T-01–T-08 | Cross-artifact lineage, crash recovery, compatibility, and all prior guarantees remain green | regression | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_contract.py projects/spatial-pharma-dl/tests/test_artifact_adapters.py projects/spatial-pharma-dl/tests/test_artifact_orchestration.py projects/spatial-pharma-dl/tests/test_artifact_roundtrips.py projects/spatial-pharma-dl/tests/test_foundation.py projects/spatial-pharma-dl/tests/test_cohort_admission.py && python scripts/verify.py fast` | ✅ | ⬜ pending |
+| 4-03-01 | 03 | 3 | ART-03, ART-04 | T-06, T-08 | Checkpoints and benchmark/report tables validate contract/state/table schemas without claiming Phase 5 deserialization safety | integration | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_adapters.py -k "checkpoint or benchmark or report"` | ✅ | ✅ passed |
+| 4-03-02 | 03 | 3 | ART-04 | T-04, T-08 | Cohort/preprocessing/experiment manifests, summaries, training history, and foundation result tables publish atomically with unchanged inner schemas and no reader/writer bypass | orchestration/static | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_orchestration.py -k "manifest or summary or training_history or foundation_result or bypass or pipeline"` | ✅ | ✅ passed |
+| 4-03-03 | 03 | 3 | ART-03, ART-04 | T-01–T-08 | Cross-artifact lineage, crash recovery, compatibility, and all prior guarantees remain green | regression | `python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests/test_artifact_contract.py projects/spatial-pharma-dl/tests/test_artifact_adapters.py projects/spatial-pharma-dl/tests/test_artifact_orchestration.py projects/spatial-pharma-dl/tests/test_artifact_roundtrips.py projects/spatial-pharma-dl/tests/test_foundation.py projects/spatial-pharma-dl/tests/test_cohort_admission.py && python scripts/verify.py fast` | ✅ | ✅ passed — Ruff + 395 offline |
 
 ## Wave 0 Requirements
 
 - [x] `projects/spatial-pharma-dl/tests/test_artifact_contract.py` — pure manifest, fingerprint, checksum, hostile admission, and atomic fault-injection evidence.
 - [x] `projects/spatial-pharma-dl/tests/test_artifact_adapters.py` — real tiny H5AD/NPZ/table production-reader schema and lineage evidence; checkpoint coverage remains Plan 04-03.
 - [x] `projects/spatial-pharma-dl/tests/test_artifact_orchestration.py` — regeneration, runner publication, bypass inventory, and compatibility evidence.
-- [ ] Reuse Phase 1 artifact fixtures and Phase 2/3 exact primitive/identity fixtures; do not create parallel conventions.
+- [x] Reuse Phase 1 artifact fixtures and Phase 2/3 exact primitive/identity fixtures; do not create parallel conventions.
 
 ## Manual-Only Verifications
 
