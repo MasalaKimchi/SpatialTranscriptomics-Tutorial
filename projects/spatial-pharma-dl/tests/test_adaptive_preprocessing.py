@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import sys
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ import yaml
 from src import data
 from src.identity import IdentityValidationError
 from src.validation import (
+    PreprocessingManifest,
     PreprocessingValidationError,
     finalize_preprocessing_resolution,
     resolve_post_qc_preprocessing,
@@ -23,6 +25,7 @@ from src.validation import (
 pytestmark = pytest.mark.offline
 
 CONFIG_PATH = __import__("pathlib").Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+RUNNER_PATH = CONFIG_PATH.parents[1] / "scripts" / "run_pipeline.py"
 
 
 def _valid_config():
@@ -49,6 +52,20 @@ def _resolve(**overrides):
     }
     values.update(overrides)
     return resolve_post_qc_preprocessing(**values)
+
+
+def _record(slide_id: str):
+    return finalize_preprocessing_resolution(
+        _resolve(slide_id=slide_id), actual_hvgs=6
+    ).to_dict()
+
+
+def _load_runner():
+    spec = importlib.util.spec_from_file_location("adaptive_runner", RUNNER_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_resolve_and_finalize_accept_legal_requests() -> None:
@@ -263,3 +280,70 @@ def test_preprocessing_metadata_h5ad_round_trip(tmp_path, monkeypatch, synthetic
     restored = ad.read_h5ad(path).uns["spatial_pharma_preprocessing"]
     assert restored == expected
     assert json.dumps(expected, sort_keys=True, separators=(",", ":"), allow_nan=False) == canonical
+
+
+def test_preprocessing_manifest_is_admitted_order_and_canonical() -> None:
+    first = PreprocessingManifest(
+        slide_ids=["slide_b", "slide_a"],
+        records=[_record("slide_b"), _record("slide_a")],
+    )
+    second = PreprocessingManifest(
+        slide_ids=["slide_b", "slide_a"],
+        records=[_record("slide_b"), _record("slide_a")],
+    )
+    assert first.canonical_json == second.canonical_json
+    assert first.to_dict()["slide_ids"] == ["slide_b", "slide_a"]
+    assert [record["slide_id"] for record in first.to_dict()["records"]] == [
+        "slide_b", "slide_a"
+    ]
+    assert first.to_dict()["schema_version"] == "spatial-pharma-preprocessing-manifest-v1"
+
+
+def test_manifest_rejects_hostile_values_before_hooks_or_serialization() -> None:
+    calls: list[str] = []
+
+    class HostileInt(int):
+        def bit_length(self):
+            calls.append("bit_length")
+            raise AssertionError("hostile hook")
+
+        def __repr__(self):
+            calls.append("repr")
+            raise AssertionError("hostile hook")
+
+    record = _record("slide_a")
+    record["counts"]["input_spots"] = HostileInt(12)
+    with pytest.raises(PreprocessingValidationError, match="malformed_preprocessing_manifest"):
+        PreprocessingManifest(slide_ids=["slide_a"], records=[record])
+    assert calls == []
+
+
+def test_pipeline_manifest_failure_precedes_write_and_downstream(tmp_path, monkeypatch) -> None:
+    runner = _load_runner()
+    cfg = _valid_config()
+    cfg["cohorts"] = {"oncology": ["slide_a", "slide_b"], "external": [], "benchmark": []}
+    malformed = _record("slide_a")
+    malformed["schema_version"] = "wrong"
+    monkeypatch.setenv("PHARMA_TRAIN_ONLY", "1")
+    monkeypatch.delenv("PHARMA_QUICK", raising=False)
+    monkeypatch.delenv("PHARMA_FOUNDATION", raising=False)
+    monkeypatch.setattr(runner, "load_config", lambda: cfg)
+    monkeypatch.setattr(runner, "available_processed_slide_ids", lambda ids: set(ids))
+    monkeypatch.setattr(runner, "pharma_outputs_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "load_slide",
+        lambda sid: SimpleNamespace(uns={"spatial_pharma_preprocessing": malformed if sid == "slide_a" else _record(sid)}),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_load_stages",
+        lambda: SimpleNamespace(
+            st=SimpleNamespace(set_seeds=lambda _seed: None),
+            build_labels_cohort=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("labels reached")),
+        ),
+    )
+    with pytest.raises(PreprocessingValidationError):
+        runner.main()
+    assert not (tmp_path / "preprocessing_manifest.json").exists()
+    assert not (tmp_path / "cohort_manifest.json").exists()

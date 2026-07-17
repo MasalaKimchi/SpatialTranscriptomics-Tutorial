@@ -22,11 +22,17 @@ from src.data import (  # noqa: E402
     SourceAcquisitionError,
     available_processed_slide_ids,
     cohort_slide_ids,
+    load_slide,
     load_config,
     pharma_outputs_dir,
     preprocess_cohort,
 )
-from src.validation import CohortAdmissionError, admit_run, resolve_config  # noqa: E402
+from src.validation import (  # noqa: E402
+    CohortAdmissionError,
+    PreprocessingManifest,
+    admit_run,
+    resolve_config,
+)
 
 
 def _load_stages() -> SimpleNamespace:
@@ -102,6 +108,16 @@ def _curate_sources(cfg: dict, slide_ids: list[str]):
         raise
 
 
+def _assemble_preprocessing_manifest(final_admitted) -> PreprocessingManifest:
+    """Validate complete per-slide preprocessing facts in admitted order."""
+    slide_ids = list(final_admitted.slide_ids)
+    records = []
+    for slide_id in slide_ids:
+        adata = load_slide(slide_id)
+        records.append(adata.uns.get("spatial_pharma_preprocessing"))
+    return PreprocessingManifest(slide_ids=slide_ids, records=records)
+
+
 def main() -> None:
     cfg = load_config()
     if os.environ.get("PHARMA_FOUNDATION"):
@@ -138,11 +154,17 @@ def main() -> None:
         if record.cohort == "oncology"
     ]
     stages = _load_stages()
+    preprocessing_manifest = _assemble_preprocessing_manifest(final_admitted)
     stages.st.set_seeds(cfg["seed"])
 
     out_dir = pharma_outputs_dir()
     manifest_path = out_dir / "cohort_manifest.json"
     manifest_path.write_text(final_admitted.manifest.canonical_json, encoding="utf-8")
+    preprocessing_manifest_path = out_dir / "preprocessing_manifest.json"
+    preprocessing_manifest_path.write_text(
+        preprocessing_manifest.canonical_json,
+        encoding="utf-8",
+    )
 
     if not train_only:
         summary = stages.cohort_summary(all_slides)

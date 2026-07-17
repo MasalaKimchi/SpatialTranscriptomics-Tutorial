@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -195,6 +196,7 @@ def preprocess_slide(
     )
     adata.obs["slide_id"] = sample_id
     adata.uns["spatial_pharma_preprocessing"] = resolution.to_dict()
+    adata.uns["spatial_pharma_preprocessing_canonical_json"] = resolution.canonical_json
     return adata
 
 
@@ -214,7 +216,11 @@ def load_slide(sample_id: str):
         raise FileNotFoundError(
             f"Missing {path}. Run notebook 01 or preprocess_cohort() first."
         )
-    return ad.read_h5ad(path)
+    adata = ad.read_h5ad(path)
+    canonical = adata.uns.get("spatial_pharma_preprocessing_canonical_json")
+    if type(canonical) is str:
+        adata.uns["spatial_pharma_preprocessing"] = json.loads(canonical)
+    return adata
 
 
 def preprocess_cohort(

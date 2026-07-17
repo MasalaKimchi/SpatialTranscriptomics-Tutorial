@@ -233,6 +233,112 @@ class PreprocessingResolution:
         return value
 
 
+def _manifest_error(guidance: str) -> PreprocessingValidationError:
+    return PreprocessingValidationError(
+        stage="run_provenance",
+        reason_code="malformed_preprocessing_manifest",
+        counts={},
+        requested={},
+        guidance=guidance,
+    )
+
+
+def _admit_manifest_json(value: object, path: str) -> object:
+    """Copy an untrusted candidate only after exact JSON-primitive admission."""
+    value_type = type(value)
+    if value is None or value_type in (str, bool):
+        return value
+    if value_type is int:
+        if value.bit_length() > 4096:
+            raise _manifest_error(f"Replace the oversized integer at {path}.")
+        return value
+    if value_type is float:
+        if not math.isfinite(value):
+            raise _manifest_error(f"Replace the non-finite number at {path}.")
+        return value
+    if value_type is list:
+        return [
+            _admit_manifest_json(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if value_type is dict:
+        keys = list(value.keys())
+        if any(type(key) is not str for key in keys):
+            raise _manifest_error(f"Use exact string mapping keys at {path}.")
+        return {
+            key: _admit_manifest_json(value[key], f"{path}.{key}")
+            for key in sorted(keys)
+        }
+    raise _manifest_error(f"Use only exact JSON primitives at {path}.")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class PreprocessingManifest:
+    """Canonical admitted-order preprocessing provenance for one run."""
+
+    canonical_json: str
+
+    def __init__(self, *, slide_ids: object, records: object) -> None:
+        admitted_ids = _admit_manifest_json(slide_ids, "slide_ids")
+        admitted_records = _admit_manifest_json(records, "records")
+        if type(admitted_ids) is not list or any(
+            type(slide_id) is not str or not slide_id.strip()
+            for slide_id in admitted_ids
+        ):
+            raise _manifest_error("Provide slide_ids as a list of non-empty strings.")
+        if len(set(admitted_ids)) != len(admitted_ids):
+            raise _manifest_error("Remove duplicate admitted slide IDs.")
+        if type(admitted_records) is not list or len(admitted_records) != len(admitted_ids):
+            raise _manifest_error("Provide exactly one preprocessing record per slide.")
+        expected_top = {
+            "schema_version",
+            "slide_id",
+            "counts",
+            "exclusions",
+            "requested",
+            "resolved",
+            "reasons",
+        }
+        expected_sections = {
+            "counts": {
+                "input_spots", "input_genes", "after_filter_cells_spots",
+                "after_filter_cells_genes", "after_filter_genes_spots",
+                "after_filter_genes_genes", "post_qc_spots", "post_qc_genes",
+                "actual_hvgs",
+            },
+            "exclusions": {
+                "cell_filter", "gene_filter", "mitochondrial_filter",
+                "hvg_not_selected",
+            },
+            "requested": {"hvg", "pca", "neighbors", "graph_pcs"},
+            "resolved": {"hvg_call", "pca", "neighbors", "graph_pcs"},
+            "reasons": {"hvg", "pca", "neighbors", "graph_pcs"},
+        }
+        for index, (slide_id, record) in enumerate(zip(admitted_ids, admitted_records)):
+            if type(record) is not dict or set(record) != expected_top:
+                raise _manifest_error(f"Record {index} has an invalid schema.")
+            if record["schema_version"] != "spatial-pharma-preprocessing-v1":
+                raise _manifest_error(f"Record {index} has an unsupported schema version.")
+            if record["slide_id"] != slide_id:
+                raise _manifest_error(f"Record {index} does not match admitted slide order.")
+            for section, keys in expected_sections.items():
+                if type(record[section]) is not dict or set(record[section]) != keys:
+                    raise _manifest_error(f"Record {index} has an invalid {section} section.")
+        value = {
+            "schema_version": "spatial-pharma-preprocessing-manifest-v1",
+            "slide_ids": admitted_ids,
+            "records": admitted_records,
+        }
+        object.__setattr__(self, "canonical_json", _canonical_json(value))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a fresh exact-built-in manifest tree."""
+        value = json.loads(self.canonical_json)
+        if type(value) is not dict:  # pragma: no cover - constructor invariant
+            raise TypeError("Preprocessing manifest root must be a JSON object.")
+        return value
+
+
 def _canonical_json(value: object) -> str:
     return json.dumps(
         value,

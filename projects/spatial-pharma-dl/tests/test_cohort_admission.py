@@ -491,6 +491,33 @@ def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
     monkeypatch.setattr(runner, "preprocess_cohort", preprocess)
     monkeypatch.setattr(runner, "_load_stages", lambda: stages)
     monkeypatch.setattr(runner, "pharma_outputs_dir", lambda: tmp_path)
+    from src.validation import (
+        finalize_preprocessing_resolution,
+        resolve_post_qc_preprocessing,
+    )
+
+    def processed_slide(slide_id):
+        resolution = resolve_post_qc_preprocessing(
+            slide_id=slide_id,
+            input_spots=12,
+            input_genes=10,
+            after_filter_cells_spots=10,
+            after_filter_cells_genes=10,
+            after_filter_genes_spots=10,
+            after_filter_genes_genes=8,
+            post_qc_spots=8,
+            post_qc_genes=8,
+            requested_hvg=6,
+            requested_pcs=4,
+            requested_neighbors=5,
+            requested_graph_pcs=3,
+        )
+        record = finalize_preprocessing_resolution(
+            resolution, actual_hvgs=6
+        ).to_dict()
+        return SimpleNamespace(uns={"spatial_pharma_preprocessing": record})
+
+    monkeypatch.setattr(runner, "load_slide", processed_slide)
 
     runner.main()
 
