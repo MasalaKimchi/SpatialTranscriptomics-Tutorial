@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src import benchmark, data, eval as evaluation, labels, patches, train
+from src import benchmark, data, eval as evaluation, foundation, labels, patches, train
+from src import foundation_eval
 from src.validation import StageValidationError, require_non_empty
 
 pytestmark = pytest.mark.offline
@@ -387,4 +388,99 @@ def test_rf_public_training_rejects_empty_before_radiomics_or_estimator(
             np.ones((1, 3, 4, 4), dtype=np.float32),
             _fold_labels().iloc[[0]],
             cfg=_fold_cfg(),
+        )
+
+
+class _ForbiddenEncoder:
+    def __call__(self, *_args, **_kwargs):
+        return _forbidden()
+
+
+def test_foundation_embedding_empty_batch_fails_before_model_forward() -> None:
+    with pytest.raises(StageValidationError, match="foundation_embedding") as caught:
+        foundation.extract_frozen_embeddings(
+            np.zeros((0, 3, 8, 8), dtype=np.float32),
+            _ForbiddenEncoder(),
+            foundation.FOUNDATION_MODELS["kaiko_vits16"],
+            device="cpu",
+        )
+
+    assert caught.value.shape == (0, 3, 8, 8)
+
+
+def test_foundation_loso_empty_inputs_fail_before_encoder_or_cache(monkeypatch) -> None:
+    monkeypatch.setattr(foundation, "load_config", _forbidden)
+    monkeypatch.setattr(foundation, "load_frozen_encoder", _forbidden)
+    monkeypatch.setattr(foundation, "load_or_extract_slide_embeddings", _forbidden)
+
+    with pytest.raises(StageValidationError, match="foundation_loso_admission"):
+        foundation.run_foundation_loso([], pd.DataFrame())
+
+    with pytest.raises(StageValidationError, match="cohort label rows"):
+        foundation.run_foundation_loso(
+            ["slide_a", "slide_b"], pd.DataFrame(), cfg={}
+        )
+
+
+def test_foundation_empty_slide_embeddings_fail_before_probe(monkeypatch) -> None:
+    non_empty_labels = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_b"],
+            "spot_id": ["a0", "b0"],
+            "tme_class_id": [0, 1],
+            "module_signal": [0.1, 0.9],
+        }
+    )
+    monkeypatch.setattr(foundation, "load_frozen_encoder", lambda _cfg: object())
+    monkeypatch.setattr(
+        foundation,
+        "load_or_extract_slide_embeddings",
+        lambda *_args, **_kwargs: (
+            np.zeros((0, 4), dtype=np.float32),
+            non_empty_labels.iloc[:0],
+        ),
+    )
+    monkeypatch.setattr(foundation, "train_eval_linear_probe", _forbidden)
+
+    with pytest.raises(StageValidationError, match="foundation_loso_embedding"):
+        foundation.run_foundation_loso(
+            ["slide_a", "slide_b"], non_empty_labels, cfg={"seed": 0}
+        )
+
+
+def test_foundation_probe_empty_inputs_fail_before_pipeline(monkeypatch) -> None:
+    monkeypatch.setattr(foundation, "make_pipeline", _forbidden)
+
+    with pytest.raises(StageValidationError, match="foundation_probe_training"):
+        foundation.train_eval_linear_probe(
+            np.zeros((0, 4), dtype=np.float32),
+            _fold_labels().iloc[:0],
+            np.ones((1, 4), dtype=np.float32),
+            _fold_labels().iloc[[0]],
+            cfg=_fold_cfg(),
+        )
+
+
+def test_foundation_task_filter_rejects_zero_retained_rows() -> None:
+    embeddings = np.ones((2, 4), dtype=np.float32)
+    task_labels = pd.DataFrame({"tme_class": ["out_of_scope", "unknown"]})
+
+    with pytest.raises(StageValidationError, match="foundation_task_filter") as caught:
+        foundation_eval.prepare_classification_task(
+            embeddings, task_labels, "confident_3class"
+        )
+
+    assert caught.value.observed == 0
+    with pytest.raises(ValueError, match="Unknown task"):
+        foundation_eval.prepare_classification_task(
+            embeddings, task_labels, "not_a_task"
+        )
+
+
+def test_nested_loso_empty_cohort_fails_before_probe(monkeypatch) -> None:
+    monkeypatch.setattr(foundation_eval, "_fit_probe", _forbidden)
+
+    with pytest.raises(StageValidationError, match="nested_loso_admission"):
+        foundation_eval.nested_loso_classification(
+            [], {}, task="confident_3class"
         )

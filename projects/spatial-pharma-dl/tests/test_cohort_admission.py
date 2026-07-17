@@ -18,6 +18,7 @@ from src.validation import (
     CohortAdmissionError,
     CohortManifest,
     SlideAdmission,
+    StageValidationError,
     admit_run,
     resolve_config,
 )
@@ -353,8 +354,11 @@ def test_explicit_empty_values_are_not_replaced_by_defaults(
     monkeypatch.setattr(labels, "load_config", forbidden_default)
     monkeypatch.setattr(patches, "load_config", forbidden_default)
 
-    assert data.preprocess_cohort([], cfg={}) == {}
-    assert data.cohort_summary([]).empty
+    with pytest.raises(StageValidationError, match="cohort_preprocessing"):
+        data.preprocess_cohort([], cfg={})
+    with pytest.raises(StageValidationError, match="cohort_summary"):
+        data.cohort_summary([])
     assert labels.tme_class_names({"labels": {"tme_classes": []}}) == []
     marker = object()
-    assert patches.build_patch_cohort([], ref_stain=marker, cfg={}) is marker
+    with pytest.raises(StageValidationError, match="patch_cohort"):
+        patches.build_patch_cohort([], ref_stain=marker, cfg={})

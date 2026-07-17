@@ -12,6 +12,8 @@ from sklearn.metrics import f1_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler, normalize
 
+from .validation import require_non_empty
+
 
 TASK_CLASSES = {
     "all_4class": (
@@ -82,6 +84,12 @@ def prepare_classification_task(
     class_to_id = {name: idx for idx, name in enumerate(class_names)}
     keep = labels["tme_class"].isin(class_names).to_numpy()
     filtered_labels = labels.loc[keep].reset_index(drop=True)
+    require_non_empty(
+        filtered_labels,
+        stage="foundation_task_filter",
+        subject=f"retained rows for task {task}",
+        guidance="Provide labels belonging to one of the configured task classes.",
+    )
     y = filtered_labels["tme_class"].map(class_to_id).to_numpy(dtype=np.int64)
     return embeddings[keep], y, filtered_labels, class_names
 
@@ -91,6 +99,25 @@ def _fit_probe(
     candidate: ProbeCandidate,
     seed: int,
 ) -> Any:
+    require_non_empty(
+        train_parts,
+        stage="nested_loso_probe_training",
+        subject="training slide parts",
+        guidance="Provide at least one non-empty outer-training slide part.",
+    )
+    for part_index, (embeddings, labels) in enumerate(train_parts):
+        require_non_empty(
+            embeddings,
+            stage="nested_loso_probe_training",
+            subject=f"training embeddings part {part_index}",
+            guidance="Retain at least one embedding in every training slide part.",
+        )
+        require_non_empty(
+            labels,
+            stage="nested_loso_probe_training",
+            subject=f"training labels part {part_index}",
+            guidance="Retain at least one label in every training slide part.",
+        )
     x_train = np.concatenate(
         [
             preprocess_slide_embeddings(x, candidate.preprocessing)
@@ -192,6 +219,14 @@ def nested_loso_classification(
     """Run nested LOSO selection and unbiased outer-slide evaluation."""
     task_data: dict[str, tuple[np.ndarray, np.ndarray, pd.DataFrame]] = {}
     class_names = TASK_CLASSES[task]
+    unique_non_empty = [slide_id for slide_id in dict.fromkeys(slide_ids) if slide_id]
+    require_non_empty(
+        unique_non_empty,
+        stage="nested_loso_admission",
+        subject="unique non-empty slide IDs",
+        minimum=2,
+        guidance="Provide at least two distinct slides for nested LOSO.",
+    )
     for slide_id in slide_ids:
         embeddings, labels = slide_data[slide_id]
         x, y, filtered, _ = prepare_classification_task(embeddings, labels, task)
@@ -211,6 +246,18 @@ def nested_loso_classification(
         train_parts = [task_data[s][:2] for s in train_slides]
         model = _fit_probe(train_parts, selected, seed)
         x_val, y_val, val_labels = task_data[val_slide]
+        require_non_empty(
+            x_val,
+            stage="nested_loso_probe_prediction",
+            subject=f"held-out embeddings for slide {val_slide}",
+            guidance="Retain at least one held-out task embedding before prediction.",
+        )
+        require_non_empty(
+            y_val,
+            stage="nested_loso_probe_prediction",
+            subject=f"held-out labels for slide {val_slide}",
+            guidance="Retain at least one held-out task label before prediction.",
+        )
         y_pred = model.predict(
             preprocess_slide_embeddings(x_val, selected.preprocessing)
         )

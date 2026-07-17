@@ -23,6 +23,7 @@ from .device import device_label, resolve_device
 from .eval import classification_metrics, regression_metrics
 from .labels import classification_column, regression_columns
 from .train import _maybe_subsample, load_slide_patches, loso_folds
+from .validation import StageValidationError, require_non_empty
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,20 @@ def extract_frozen_embeddings(
     batch_size: int = 64,
 ) -> np.ndarray:
     """Embed NCHW float patches without computing gradients."""
+    if batch_size < 1:
+        raise StageValidationError(
+            stage="foundation_embedding",
+            subject="batch size",
+            observed=batch_size,
+            minimum=1,
+            guidance="Set batch_size to a positive integer before embedding.",
+        )
+    require_non_empty(
+        patches,
+        stage="foundation_embedding",
+        subject="NCHW patch batch",
+        guidance="Provide at least one patch before foundation embedding.",
+    )
     dev = torch.device(device)
     embeddings = []
     for start in range(0, len(patches), batch_size):
@@ -158,8 +173,6 @@ def extract_frozen_embeddings(
         if output.ndim > 2:
             output = output.flatten(1)
         embeddings.append(output.detach().float().cpu().numpy())
-    if not embeddings:
-        raise ValueError("Cannot extract embeddings from an empty patch array.")
     return np.concatenate(embeddings, axis=0)
 
 
@@ -192,6 +205,18 @@ def load_or_extract_slide_embeddings(
             indexed = slide_labels.set_index(slide_labels["spot_id"].astype(str))
             if set(cached_spots).issubset(indexed.index):
                 aligned_labels = indexed.loc[cached_spots].reset_index(drop=True)
+                require_non_empty(
+                    cached_embeddings,
+                    stage="foundation_embedding_cache",
+                    subject=f"cached embeddings for slide {slide_id}",
+                    guidance="Regenerate a non-empty embedding cache for this slide.",
+                )
+                require_non_empty(
+                    aligned_labels,
+                    stage="foundation_embedding_cache",
+                    subject=f"cached aligned labels for slide {slide_id}",
+                    guidance="Regenerate aligned labels for the cached embeddings.",
+                )
                 return cached_embeddings, aligned_labels
 
     patches, aligned_labels = load_slide_patches(slide_id, labels, cfg=cfg)
@@ -229,11 +254,34 @@ def train_eval_linear_probe(
     seed: int = 0,
 ) -> dict[str, Any]:
     """Fit linear heads on frozen embeddings and evaluate held-out spots."""
-    cfg = cfg or load_config()
+    require_non_empty(
+        train_embeddings,
+        stage="foundation_probe_training",
+        subject="training embeddings",
+        guidance="Provide at least one training embedding before fitting probes.",
+    )
+    require_non_empty(
+        train_labels,
+        stage="foundation_probe_training",
+        subject="training labels",
+        guidance="Provide at least one training label before fitting probes.",
+    )
+    require_non_empty(
+        val_embeddings,
+        stage="foundation_probe_prediction",
+        subject="held-out embeddings",
+        guidance="Provide at least one held-out embedding before probe prediction.",
+    )
+    require_non_empty(
+        val_labels,
+        stage="foundation_probe_prediction",
+        subject="held-out labels",
+        guidance="Provide at least one held-out label before probe prediction.",
+    )
+    if cfg is None:
+        cfg = load_config()
     cls_col = classification_column(cfg)
     reg_cols = regression_columns(train_labels, cfg)
-    if not reg_cols:
-        raise ValueError("No regression targets found for the foundation probe.")
 
     y_cls_train = train_labels[cls_col].to_numpy()
     y_cls_val = val_labels[cls_col].to_numpy()
@@ -286,7 +334,22 @@ def run_foundation_loso(
     cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Extract each slide once, then run slide-level linear-probe CV."""
-    cfg = cfg or load_config()
+    unique_non_empty = [slide_id for slide_id in dict.fromkeys(slide_ids) if slide_id]
+    require_non_empty(
+        unique_non_empty,
+        stage="foundation_loso_admission",
+        subject="unique non-empty slide IDs",
+        minimum=2,
+        guidance="Admit at least two distinct slides before foundation LOSO.",
+    )
+    require_non_empty(
+        labels,
+        stage="foundation_loso_admission",
+        subject="cohort label rows",
+        guidance="Generate non-empty cohort labels before foundation LOSO.",
+    )
+    if cfg is None:
+        cfg = load_config()
     seed = int(cfg.get("seed", 0))
     bundle = load_frozen_encoder(cfg)
     slide_data: dict[str, tuple[np.ndarray, pd.DataFrame]] = {}
@@ -294,12 +357,49 @@ def run_foundation_loso(
         slide_data[slide_id] = load_or_extract_slide_embeddings(
             slide_id, labels, cfg=cfg, encoder_bundle=bundle
         )
+        embeddings, aligned_labels = slide_data[slide_id]
+        require_non_empty(
+            embeddings,
+            stage="foundation_loso_embedding",
+            subject=f"embeddings for slide {slide_id}",
+            guidance="Extract at least one aligned embedding for every admitted slide.",
+        )
+        require_non_empty(
+            aligned_labels,
+            stage="foundation_loso_embedding",
+            subject=f"aligned labels for slide {slide_id}",
+            guidance="Retain at least one aligned label for every admitted slide.",
+        )
 
     rows = []
     for fold, (train_slides, val_slide) in enumerate(loso_folds(slide_ids)):
         train_x = np.concatenate([slide_data[s][0] for s in train_slides])
         train_y = pd.concat([slide_data[s][1] for s in train_slides], ignore_index=True)
         val_x, val_y = slide_data[val_slide]
+        require_non_empty(
+            train_x,
+            stage="foundation_probe_training",
+            subject=f"concatenated training embeddings for fold {fold}",
+            guidance="Retain at least one training embedding across outer-training slides.",
+        )
+        require_non_empty(
+            train_y,
+            stage="foundation_probe_training",
+            subject=f"concatenated training labels for fold {fold}",
+            guidance="Retain at least one training label across outer-training slides.",
+        )
+        require_non_empty(
+            val_x,
+            stage="foundation_probe_prediction",
+            subject=f"held-out embeddings for slide {val_slide}",
+            guidance="Retain at least one held-out embedding before probe prediction.",
+        )
+        require_non_empty(
+            val_y,
+            stage="foundation_probe_prediction",
+            subject=f"held-out labels for slide {val_slide}",
+            guidance="Retain at least one held-out label before probe prediction.",
+        )
 
         # Match the CNN/RF smoke-test bound without invalidating slide holdout.
         quick_max = 500 if os.environ.get("PHARMA_QUICK") else None
