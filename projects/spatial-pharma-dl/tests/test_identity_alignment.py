@@ -15,6 +15,9 @@ from src.identity import (
 )
 from src import labels as label_module
 from src import patches as patch_module
+from src import foundation as foundation_module
+from src import train as train_module
+from src.foundation import FOUNDATION_MODELS
 
 pytestmark = pytest.mark.offline
 
@@ -200,4 +203,165 @@ def test_patch_producer_rejects_anndata_identity_before_coordinates_or_stack(
             "slide_a",
             np.eye(2, 3),
             {"patches": {}},
+        )
+
+
+def test_ordinary_consumer_uses_patch_source_order(monkeypatch):
+    labels = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a", "slide_b"],
+            "spot_id": ["p1", "p0", "other"],
+            "target": [11, 10, 99],
+        }
+    )
+    metadata = pd.DataFrame(
+        {"slide_id": ["slide_a", "slide_a"], "spot_id": ["p0", "p1"]}
+    )
+    patch_values = np.asarray([[[[10.0]]], [[[11.0]]]], dtype=np.float32)
+    monkeypatch.setattr(
+        train_module,
+        "load_patch_arrays",
+        lambda *_args, **_kwargs: (patch_values, metadata),
+    )
+
+    patches, aligned = train_module.load_slide_patches(
+        "slide_a", labels, cfg={}
+    )
+
+    np.testing.assert_array_equal(patches, patch_values)
+    assert aligned["spot_id"].tolist() == ["p0", "p1"]
+    assert aligned["target"].tolist() == [10, 11]
+    assert aligned["_patch_source_row"].tolist() == [0, 1]
+
+
+def test_ordinary_consumer_rejects_cardinality_before_indexing(monkeypatch):
+    labels = pd.DataFrame(
+        {"slide_id": ["slide_a"], "spot_id": ["p0"], "target": [1]}
+    )
+    metadata = labels[["slide_id", "spot_id"]].copy()
+    patch_values = np.zeros((2, 1, 1, 1), dtype=np.float32)
+    monkeypatch.setattr(
+        train_module,
+        "load_patch_arrays",
+        lambda *_args, **_kwargs: (patch_values, metadata),
+    )
+
+    with pytest.raises(IdentityValidationError, match="cardinality_mismatch"):
+        train_module.load_slide_patches("slide_a", labels, cfg={})
+
+
+def _foundation_test_config() -> dict:
+    return {
+        "foundation": {
+            "model": "kaiko_vits16",
+            "cache": True,
+            "batch_size": 2,
+        },
+        "patches": {"version": "v1"},
+    }
+
+
+def test_foundation_cache_hit_rejects_subset_before_patch_or_encoder(
+    monkeypatch, tmp_path
+):
+    cache_path = tmp_path / "cached.npz"
+    np.savez_compressed(
+        cache_path,
+        embeddings=np.zeros((1, 3), dtype=np.float32),
+        spot_ids=np.asarray(["p0"], dtype=np.str_),
+    )
+    labels = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a"],
+            "spot_id": ["p0", "p1"],
+            "target": [0, 1],
+        }
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("foundation fallback or encoder seam was reached")
+
+    monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
+    monkeypatch.setattr(
+        foundation_module, "_embedding_cache_path", lambda *_args: cache_path
+    )
+    monkeypatch.setattr(foundation_module, "load_slide_patches", forbidden)
+    monkeypatch.setattr(foundation_module, "load_frozen_encoder", forbidden)
+
+    with pytest.raises(IdentityValidationError, match="label_only"):
+        foundation_module.load_or_extract_slide_embeddings(
+            "slide_a", labels, cfg=_foundation_test_config()
+        )
+
+
+def test_foundation_cache_hit_preserves_cache_order(monkeypatch, tmp_path):
+    cache_path = tmp_path / "cached.npz"
+    embeddings = np.asarray([[11.0, 1.0], [10.0, 0.0]], dtype=np.float32)
+    np.savez_compressed(
+        cache_path,
+        embeddings=embeddings,
+        spot_ids=np.asarray(["p1", "p0"], dtype=np.str_),
+    )
+    labels = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a", "slide_b"],
+            "spot_id": ["p0", "p1", "other"],
+            "target": [10, 11, 99],
+        }
+    ).iloc[::-1].reset_index(drop=True)
+    monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
+    monkeypatch.setattr(
+        foundation_module, "_embedding_cache_path", lambda *_args: cache_path
+    )
+
+    actual, aligned = foundation_module.load_or_extract_slide_embeddings(
+        "slide_a", labels, cfg=_foundation_test_config()
+    )
+
+    np.testing.assert_array_equal(actual, embeddings)
+    assert aligned["spot_id"].tolist() == ["p1", "p0"]
+    assert aligned["target"].tolist() == [11, 10]
+
+
+def test_foundation_cache_miss_checks_extracted_cardinality_before_write(
+    monkeypatch, tmp_path
+):
+    cache_path = tmp_path / "missing.npz"
+    labels = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a"],
+            "spot_id": ["p0", "p1"],
+            "target": [10, 11],
+            "_label_source_row": [0, 1],
+            "_patch_source_row": [0, 1],
+        }
+    )
+    patches = np.zeros((2, 3, 4, 4), dtype=np.float32)
+    spec = FOUNDATION_MODELS["kaiko_vits16"]
+    monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
+    monkeypatch.setattr(
+        foundation_module, "_embedding_cache_path", lambda *_args: cache_path
+    )
+    monkeypatch.setattr(
+        foundation_module,
+        "load_slide_patches",
+        lambda *_args, **_kwargs: (patches, labels),
+    )
+    monkeypatch.setattr(
+        foundation_module,
+        "extract_frozen_embeddings",
+        lambda *_args, **_kwargs: np.zeros((1, spec.embedding_dim), dtype=np.float32),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("cache write was reached")
+
+    monkeypatch.setattr(foundation_module.np, "savez_compressed", forbidden)
+
+    with pytest.raises(IdentityValidationError, match="cardinality_mismatch"):
+        foundation_module.load_or_extract_slide_embeddings(
+            "slide_a",
+            labels.drop(columns=["_label_source_row", "_patch_source_row"]),
+            cfg=_foundation_test_config(),
+            encoder_bundle=(object(), "cpu", spec),
         )

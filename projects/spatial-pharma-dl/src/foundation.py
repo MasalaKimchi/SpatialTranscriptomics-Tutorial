@@ -21,6 +21,11 @@ from sklearn.preprocessing import StandardScaler
 from .data import load_config, pharma_processed_dir, safe_filename
 from .device import device_label, resolve_device
 from .eval import classification_metrics, regression_metrics
+from .identity import (
+    IdentityIssue,
+    IdentityValidationError,
+    align_labels_with_metadata,
+)
 from .labels import classification_column, regression_columns
 from .train import _maybe_subsample, load_slide_patches, loso_folds
 from .validation import StageValidationError, require_non_empty, resolve_config
@@ -218,31 +223,34 @@ def load_or_extract_slide_embeddings(
 
     if use_cache and cache_path.exists():
         with np.load(cache_path, allow_pickle=False) as cached:
-            cached_spots = cached["spot_ids"].astype(str)
+            cached_spots = cached["spot_ids"]
             cached_embeddings = cached["embeddings"]
-        slide_labels = labels.loc[labels["slide_id"] == slide_id].copy()
-        if not slide_labels["spot_id"].duplicated().any():
-            indexed = slide_labels.set_index(slide_labels["spot_id"].astype(str))
-            if set(cached_spots).issubset(indexed.index):
-                aligned_labels = indexed.loc[cached_spots].reset_index(drop=True)
-                require_non_empty(
-                    cached_embeddings,
-                    stage="foundation_embedding_cache",
-                    subject=f"cached embeddings for slide {slide_id}",
-                    guidance="Regenerate a non-empty embedding cache for this slide.",
-                )
-                require_non_empty(
-                    aligned_labels,
-                    stage="foundation_embedding_cache",
-                    subject=f"cached aligned labels for slide {slide_id}",
-                    guidance="Regenerate aligned labels for the cached embeddings.",
-                )
-                return cached_embeddings, aligned_labels
+        require_non_empty(
+            cached_embeddings,
+            stage="foundation_embedding_cache",
+            subject=f"cached embeddings for slide {slide_id}",
+            guidance="Regenerate a non-empty embedding cache for this slide.",
+        )
+        cache_metadata = pd.DataFrame(
+            {
+                "slide_id": [slide_id] * len(cached_spots),
+                "spot_id": cached_spots.tolist(),
+            }
+        )
+        aligned_labels = align_labels_with_metadata(
+            labels,
+            cache_metadata,
+            stage="foundation_embedding_cache",
+            expected_slide_id=slide_id,
+            value_row_count=len(cached_embeddings),
+        )
+        cache_rows = aligned_labels["_patch_source_row"].to_numpy(dtype=np.int64)
+        return cached_embeddings[cache_rows], aligned_labels
 
     patches, aligned_labels = load_slide_patches(slide_id, labels, cfg=cfg)
     # Force a fixed-width Unicode dtype so caches remain readable with
     # allow_pickle=False across pandas/NumPy versions.
-    spot_ids = np.asarray(aligned_labels["spot_id"].astype(str), dtype=np.str_)
+    spot_ids = np.asarray(aligned_labels["spot_id"].tolist(), dtype=np.str_)
 
     if encoder_bundle is None:
         encoder_bundle = load_frozen_encoder(cfg)
@@ -251,6 +259,17 @@ def load_or_extract_slide_embeddings(
     embeddings = extract_frozen_embeddings(
         patches, model, spec, dev, batch_size=batch_size
     )
+    if len(embeddings) != len(aligned_labels):
+        raise IdentityValidationError(
+            stage="foundation_embedding_extraction",
+            issues=(
+                IdentityIssue(
+                    code="cardinality_mismatch",
+                    side="values",
+                    count=abs(len(embeddings) - len(aligned_labels)),
+                ),
+            ),
+        )
     if embeddings.shape[1] != spec.embedding_dim:
         raise ValueError(
             f"{_foundation_model_spec_resolved(cfg)[0]} returned "

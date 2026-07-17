@@ -14,11 +14,11 @@ from torch.utils.data import DataLoader
 from .data import load_config, pharma_outputs_dir
 from .device import device_label, resolve_device
 from .labels import (
-    align_labels_with_patches,
     classification_column,
     regression_columns,
     tme_class_names,
 )
+from .identity import align_labels_with_metadata
 from .models import build_model
 from .patches import SpotPatchDataset, load_patch_arrays
 from .transforms import NormalizedDataset
@@ -51,8 +51,13 @@ def load_slide_patches(
     slide_id: str, labels: pd.DataFrame, cfg: dict[str, Any] | None = None
 ) -> tuple[np.ndarray, pd.DataFrame]:
     patches, meta = load_patch_arrays(slide_id, cfg=cfg)
-    slide_labels = labels[labels["slide_id"] == slide_id]
-    aligned = align_labels_with_patches(slide_labels, meta)
+    aligned = align_labels_with_metadata(
+        labels,
+        meta,
+        stage="patch_label_alignment",
+        expected_slide_id=slide_id,
+        value_row_count=len(patches),
+    )
     require_non_empty(
         aligned,
         stage="patch_label_alignment",
@@ -62,9 +67,8 @@ def load_slide_patches(
             "before fold execution."
         ),
     )
-    order = aligned["spot_id"].tolist()
-    idx_map = {s: i for i, s in enumerate(meta["spot_id"])}
-    return patches[[idx_map[s] for s in order]], aligned.reset_index(drop=True)
+    patch_rows = aligned["_patch_source_row"].to_numpy(dtype=np.int64)
+    return patches[patch_rows], aligned.reset_index(drop=True)
 
 def train_one_fold(
     train_slides: list[str],
