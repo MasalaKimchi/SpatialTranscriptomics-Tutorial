@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -161,9 +162,22 @@ def test_malformed_duplicate_and_oversized_manifest_bytes_are_bounded(raw: bytes
 
 
 def test_utils_artifacts_is_import_light() -> None:
-    forbidden = {"numpy", "pandas", "torch", "anndata", "scanpy", "torchvision", "timm", "transformers"}
-    imported = {name.split(".", 1)[0] for name in sys.modules}
-    assert forbidden.isdisjoint(imported - {"numpy", "pandas"})
+    root = Path(__file__).resolve().parents[3]
+    code = """
+import sys
+import utils.artifacts
+forbidden = {'numpy', 'pandas', 'torch', 'anndata', 'scanpy', 'torchvision', 'timm', 'transformers'}
+imported = {name.split('.', 1)[0] for name in sys.modules}
+raise SystemExit(1 if forbidden & imported else 0)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_duplicate_json_is_rejected_before_canonicalization() -> None:

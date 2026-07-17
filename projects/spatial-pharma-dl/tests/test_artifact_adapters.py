@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src import data, labels, patches
+from src import data, foundation, labels, patches
 from src.validation import finalize_preprocessing_resolution, resolve_post_qc_preprocessing
 from utils import st_helpers as st
 from utils.artifacts import ArtifactValidationError, manifest_path
@@ -155,3 +155,47 @@ def test_patch_path_resolution_is_pure(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "project_root", lambda: tmp_path)
     path = patches.patch_cache_path("slide_a", data.load_config())
     assert not path.parent.exists()
+
+
+def test_embedding_cache_round_trip_is_safe_primitive_npz(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "project_root", lambda: tmp_path)
+    cfg = data.load_config()
+    spec = foundation.FoundationModelSpec(
+        repo_id="local/test",
+        backend="test",
+        license="test",
+        mean=(0.0, 0.0, 0.0),
+        std=(1.0, 1.0, 1.0),
+        embedding_dim=2,
+    )
+    monkeypatch.setitem(foundation.FOUNDATION_MODELS, "kaiko_vits16", spec)
+    label_rows = pd.DataFrame(
+        {
+            "slide_id": ["slide_a", "slide_a"],
+            "spot_id": ["spot_0", "spot_1"],
+        }
+    )
+    patch_rows = label_rows.assign(x=[0.0, 1.0], y=[0.0, 1.0], native_patch_px=[8, 8])
+    patch_values = np.zeros((2, 3, 4, 4), dtype=np.float32)
+    patches.save_patch_arrays("slide_a", patch_values, patch_rows, cfg=cfg)
+    expected = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    monkeypatch.setattr(
+        foundation,
+        "load_slide_patches",
+        lambda *_args, **_kwargs: (patch_values, label_rows.assign(_patch_source_row=[0, 1])),
+    )
+    monkeypatch.setattr(
+        foundation,
+        "extract_frozen_embeddings",
+        lambda *_args, **_kwargs: expected.copy(),
+    )
+    bundle = (object(), "cpu", spec)
+    miss, _ = foundation.load_or_extract_slide_embeddings(
+        "slide_a", label_rows, cfg=cfg, encoder_bundle=bundle
+    )
+    hit, _ = foundation.load_or_extract_slide_embeddings(
+        "slide_a", label_rows, cfg=cfg, encoder_bundle=bundle
+    )
+    np.testing.assert_array_equal(miss, expected)
+    np.testing.assert_array_equal(hit, expected)
+    assert manifest_path(foundation._embedding_cache_path("slide_a", cfg)).is_file()

@@ -19,6 +19,11 @@ from src import patches as patch_module
 from src import foundation as foundation_module
 from src import train as train_module
 from src.foundation import FOUNDATION_MODELS
+from utils.artifacts import (
+    ARTIFACT_CONTRACT_VERSIONS,
+    ArtifactValidationError,
+    publish_artifact,
+)
 
 pytestmark = pytest.mark.offline
 
@@ -658,31 +663,64 @@ def test_ordinary_consumer_rejects_cardinality_before_indexing(monkeypatch):
 
 
 def _foundation_test_config() -> dict:
-    return {
-        "foundation": {
-            "model": "kaiko_vits16",
-            "cache": True,
-            "batch_size": 2,
-        },
-        "patches": {"version": "v1"},
-    }
+    cfg = foundation_module.load_config()
+    cfg["foundation"].update(model="kaiko_vits16", cache=True, batch_size=2)
+    cfg["patches"]["version"] = "v1"
+    return cfg
+
+
+def _publish_test_embedding(cache_path, embeddings, spot_ids, labels, cfg):
+    expected = foundation_module._expected_spot_ids(labels, "slide_a")
+    spec = FOUNDATION_MODELS["kaiko_vits16"]
+    try:
+        schema = foundation_module._embedding_schema(
+            embeddings,
+            spot_ids,
+            expected_spots=expected,
+            expected_dim=spec.embedding_dim,
+        )
+    except Exception:
+        schema = {"test_semantic_corruption": True}
+
+    def write_payload(path):
+        with path.open("wb") as handle:
+            np.savez_compressed(
+                handle, embeddings=embeddings, spot_ids=spot_ids
+            )
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    publish_artifact(
+        cache_path,
+        artifact_kind="embedding",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["embedding"],
+        fingerprint=foundation_module._embedding_fingerprint(
+            "slide_a", expected, cfg
+        ),
+        payload_format="npz-safe-primitives",
+        payload_schema=schema,
+        write_payload=write_payload,
+        reader=lambda _path: None,
+    )
 
 
 def test_foundation_cache_hit_rejects_subset_before_patch_or_encoder(
     monkeypatch, tmp_path
 ):
     cache_path = tmp_path / "cached.npz"
-    np.savez_compressed(
-        cache_path,
-        embeddings=np.zeros((1, 3), dtype=np.float32),
-        spot_ids=np.asarray(["p0"], dtype=np.str_),
-    )
     labels = pd.DataFrame(
         {
             "slide_id": ["slide_a", "slide_a"],
             "spot_id": ["p0", "p1"],
             "target": [0, 1],
         }
+    )
+    cfg = _foundation_test_config()
+    _publish_test_embedding(
+        cache_path,
+        np.zeros((1, FOUNDATION_MODELS["kaiko_vits16"].embedding_dim), dtype=np.float32),
+        np.asarray(["p0"], dtype=np.str_),
+        labels,
+        cfg,
     )
 
     def forbidden(*_args, **_kwargs):
@@ -695,20 +733,18 @@ def test_foundation_cache_hit_rejects_subset_before_patch_or_encoder(
     monkeypatch.setattr(foundation_module, "load_slide_patches", forbidden)
     monkeypatch.setattr(foundation_module, "load_frozen_encoder", forbidden)
 
-    with pytest.raises(IdentityValidationError, match="label_only"):
+    with pytest.raises(ArtifactValidationError, match="reader_validation_failed"):
         foundation_module.load_or_extract_slide_embeddings(
-            "slide_a", labels, cfg=_foundation_test_config()
+            "slide_a", labels, cfg=cfg
         )
 
 
 def test_foundation_cache_hit_preserves_cache_order(monkeypatch, tmp_path):
     cache_path = tmp_path / "cached.npz"
-    embeddings = np.asarray([[11.0, 1.0], [10.0, 0.0]], dtype=np.float32)
-    np.savez_compressed(
-        cache_path,
-        embeddings=embeddings,
-        spot_ids=np.asarray(["p1", "p0"], dtype=np.str_),
+    embeddings = np.zeros(
+        (2, FOUNDATION_MODELS["kaiko_vits16"].embedding_dim), dtype=np.float32
     )
+    embeddings[:, :2] = np.asarray([[11.0, 1.0], [10.0, 0.0]])
     labels = pd.DataFrame(
         {
             "slide_id": ["slide_a", "slide_a", "slide_b"],
@@ -716,13 +752,21 @@ def test_foundation_cache_hit_preserves_cache_order(monkeypatch, tmp_path):
             "target": [10, 11, 99],
         }
     ).iloc[::-1].reset_index(drop=True)
+    cfg = _foundation_test_config()
+    _publish_test_embedding(
+        cache_path,
+        embeddings,
+        np.asarray(["p1", "p0"], dtype=np.str_),
+        labels,
+        cfg,
+    )
     monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
     monkeypatch.setattr(
         foundation_module, "_embedding_cache_path", lambda *_args: cache_path
     )
 
     actual, aligned = foundation_module.load_or_extract_slide_embeddings(
-        "slide_a", labels, cfg=_foundation_test_config()
+        "slide_a", labels, cfg=cfg
     )
 
     np.testing.assert_array_equal(actual, embeddings)
@@ -973,11 +1017,18 @@ def test_foundation_cache_hit_guards_labels_before_merge_or_encoder(
 ):
     labels, metadata, _ = _consumer_adversary(defect)
     cache_path = tmp_path / f"hit_{defect}.npz"
-    np.savez_compressed(
-        cache_path,
-        embeddings=np.zeros((2, 3), dtype=np.float32),
-        spot_ids=metadata["spot_id"].to_numpy(dtype=np.str_),
-    )
+    cfg = _foundation_test_config()
+    if defect in {"label_only", "cross_slide"}:
+        _publish_test_embedding(
+            cache_path,
+            np.zeros(
+                (2, FOUNDATION_MODELS["kaiko_vits16"].embedding_dim),
+                dtype=np.float32,
+            ),
+            metadata["spot_id"].to_numpy(dtype=np.str_),
+            labels,
+            cfg,
+        )
     monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
     monkeypatch.setattr(
         foundation_module, "_embedding_cache_path", lambda *_args: cache_path
@@ -990,9 +1041,9 @@ def test_foundation_cache_hit_guards_labels_before_merge_or_encoder(
     monkeypatch.setattr(foundation_module, "load_slide_patches", forbidden)
     monkeypatch.setattr(foundation_module, "load_frozen_encoder", forbidden)
 
-    with pytest.raises(IdentityValidationError):
+    with pytest.raises((IdentityValidationError, ArtifactValidationError)):
         foundation_module.load_or_extract_slide_embeddings(
-            "slide_a", labels, cfg=_foundation_test_config()
+            "slide_a", labels, cfg=cfg
         )
 
 
@@ -1001,10 +1052,13 @@ def test_foundation_cache_hit_rejects_value_row_count_before_merge(
 ):
     labels, metadata, _ = _consumer_adversary("row_count")
     cache_path = tmp_path / "hit_row_count.npz"
-    np.savez_compressed(
+    cfg = _foundation_test_config()
+    _publish_test_embedding(
         cache_path,
-        embeddings=np.zeros((1, 3), dtype=np.float32),
-        spot_ids=metadata["spot_id"].to_numpy(dtype=np.str_),
+        np.zeros((1, FOUNDATION_MODELS["kaiko_vits16"].embedding_dim), dtype=np.float32),
+        metadata["spot_id"].to_numpy(dtype=np.str_),
+        labels,
+        cfg,
     )
     monkeypatch.setattr(foundation_module, "_resolved_config_arg", lambda cfg: cfg)
     monkeypatch.setattr(
@@ -1018,7 +1072,7 @@ def test_foundation_cache_hit_rejects_value_row_count_before_merge(
         ),
     )
 
-    with pytest.raises(IdentityValidationError, match="cardinality_mismatch"):
+    with pytest.raises(ArtifactValidationError, match="reader_validation_failed"):
         foundation_module.load_or_extract_slide_embeddings(
-            "slide_a", labels, cfg=_foundation_test_config()
+            "slide_a", labels, cfg=cfg
         )

@@ -7,6 +7,8 @@ scikit-learn classifier and regressors are fitted on the training slides.
 from __future__ import annotations
 
 import os
+import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,7 @@ from sklearn.linear_model import LogisticRegression, RidgeCV
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .data import load_config, pharma_processed_dir, safe_filename
+from .data import load_config, pharma_processed_path, safe_filename
 from .device import device_label, resolve_device
 from .eval import classification_metrics, regression_metrics
 from .identity import (
@@ -29,6 +31,14 @@ from .identity import (
 from .labels import classification_column, regression_columns
 from .train import _maybe_subsample, load_slide_patches, loso_folds
 from .validation import StageValidationError, require_non_empty, resolve_config
+from .patches import _patch_fingerprint
+from utils.artifacts import (
+    ARTIFACT_CONTRACT_VERSIONS,
+    ArtifactValidationError,
+    admit_artifact,
+    build_fingerprint,
+    publish_artifact,
+)
 
 
 @dataclass(frozen=True)
@@ -204,9 +214,169 @@ def extract_frozen_embeddings(
 def _embedding_cache_path(slide_id: str, cfg: dict[str, Any]) -> Path:
     model_name, _ = _foundation_model_spec_resolved(cfg)
     patch_version = cfg.get("patches", {}).get("version", "v1")
-    cache_dir = pharma_processed_dir() / "foundation_embeddings" / model_name
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = pharma_processed_path() / "foundation_embeddings" / model_name
     return cache_dir / f"{safe_filename(slide_id)}_{patch_version}.npz"
+
+
+def _expected_spot_ids(labels: pd.DataFrame, slide_id: str) -> list[str]:
+    columns = labels.columns.tolist()
+    if (
+        any(type(column) is not str for column in columns)
+        or len(columns) != len(set(columns))
+        or "slide_id" not in columns
+        or "spot_id" not in columns
+    ):
+        raise IdentityValidationError(
+            stage="foundation_embedding_identity",
+            issues=(IdentityIssue(code="missing_column", side="labels", count=1),),
+        )
+    selected: list[str] = []
+    observed_keys: list[tuple[str, str]] = []
+    for row in range(len(labels)):
+        observed_slide = labels["slide_id"].iat[row]
+        observed_spot = labels["spot_id"].iat[row]
+        if type(observed_slide) is not str or type(observed_spot) is not str:
+            raise IdentityValidationError(
+                stage="foundation_embedding_identity",
+                issues=(IdentityIssue(code="invalid_type", side="labels", count=1),),
+            )
+        if not observed_slide.strip() or not observed_spot.strip():
+            raise IdentityValidationError(
+                stage="foundation_embedding_identity",
+                issues=(IdentityIssue(code="blank_value", side="labels", count=1),),
+            )
+        observed_keys.append((observed_slide, observed_spot))
+        if observed_slide == slide_id:
+            selected.append(observed_spot)
+    if len(set(observed_keys)) != len(observed_keys):
+        raise IdentityValidationError(
+            stage="foundation_embedding_identity",
+            issues=(IdentityIssue(code="duplicate_key", side="labels", count=1),),
+        )
+    return selected
+
+
+def _embedding_fingerprint(
+    slide_id: str,
+    spot_ids: list[str],
+    cfg: dict[str, Any],
+):
+    name, spec = _foundation_model_spec_resolved(cfg)
+    return build_fingerprint(
+        "embedding",
+        {
+            "configuration": {"foundation": {"model": name}},
+            "source": {
+                "model_name": name,
+                "repo_id": spec.repo_id,
+                "backend": spec.backend,
+                "preprocessing": {"mean": list(spec.mean), "std": list(spec.std)},
+                "embedding_dim": spec.embedding_dim,
+                "weight_identity": "declared-repository-no-pinned-revision",
+            },
+            "upstream": {
+                "patch_fingerprint": _patch_fingerprint(slide_id, cfg).digest
+            },
+            "identity": {
+                "slide_id": slide_id,
+                "spot_ids": sorted(spot_ids),
+            },
+        },
+    )
+
+
+def _embedding_schema(
+    embeddings: np.ndarray,
+    spot_ids: np.ndarray,
+    *,
+    expected_spots: list[str],
+    expected_dim: int,
+) -> dict[str, object]:
+    if (
+        type(embeddings) is not np.ndarray
+        or embeddings.dtype != np.float32
+        or embeddings.ndim != 2
+        or embeddings.shape != (len(expected_spots), expected_dim)
+        or not np.isfinite(embeddings).all()
+        or type(spot_ids) is not np.ndarray
+        or spot_ids.dtype.kind != "U"
+        or spot_ids.ndim != 1
+        or len(set(spot_ids.tolist())) != len(spot_ids)
+        or sorted(spot_ids.tolist()) != sorted(expected_spots)
+    ):
+        raise ArtifactValidationError(
+            "reader_validation_failed", artifact_kind="embedding"
+        )
+    return {
+        "keys": ["embeddings", "spot_ids"],
+        "embedding_shape": [int(value) for value in embeddings.shape],
+        "embedding_dtype": "float32",
+        "spot_dtype": spot_ids.dtype.str,
+        "identity_sha256": hashlib.sha256(
+            json.dumps(sorted(expected_spots), separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+def _read_embedding_cache(
+    path: Path, *, expected_spots: list[str], expected_dim: int
+):
+    with np.load(path, allow_pickle=False) as cached:
+        if set(cached.files) != {"embeddings", "spot_ids"}:
+            raise ArtifactValidationError(
+                "reader_validation_failed",
+                artifact_kind="embedding",
+                basename=path.name,
+            )
+        embeddings = cached["embeddings"]
+        spot_ids = cached["spot_ids"]
+    schema = _embedding_schema(
+        embeddings,
+        spot_ids,
+        expected_spots=expected_spots,
+        expected_dim=expected_dim,
+    )
+    return (embeddings, spot_ids), schema
+
+
+def _publish_embedding_cache(
+    path: Path,
+    embeddings: np.ndarray,
+    spot_ids: np.ndarray,
+    *,
+    slide_id: str,
+    cfg: dict[str, Any],
+) -> None:
+    _name, spec = _foundation_model_spec_resolved(cfg)
+    expected_spots = spot_ids.tolist()
+    schema = _embedding_schema(
+        embeddings,
+        spot_ids,
+        expected_spots=expected_spots,
+        expected_dim=spec.embedding_dim,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write_payload(temporary: Path) -> None:
+        with temporary.open("wb") as handle:
+            np.savez_compressed(
+                handle, embeddings=embeddings, spot_ids=spot_ids
+            )
+
+    publish_artifact(
+        path,
+        artifact_kind="embedding",
+        contract_version=ARTIFACT_CONTRACT_VERSIONS["embedding"],
+        fingerprint=_embedding_fingerprint(slide_id, expected_spots, cfg),
+        payload_format="npz-safe-primitives",
+        payload_schema=schema,
+        write_payload=write_payload,
+        reader=lambda temporary: _read_embedding_cache(
+            temporary,
+            expected_spots=expected_spots,
+            expected_dim=spec.embedding_dim,
+        ),
+    )
 
 
 def load_or_extract_slide_embeddings(
@@ -220,32 +390,54 @@ def load_or_extract_slide_embeddings(
     cfg = _resolved_config_arg(cfg)
     cache_path = _embedding_cache_path(slide_id, cfg)
     use_cache = bool(_foundation_config_resolved(cfg).get("cache", True))
+    expected_spots = _expected_spot_ids(labels, slide_id)
+    _model_name, expected_spec = _foundation_model_spec_resolved(cfg)
 
-    if use_cache and cache_path.exists():
-        with np.load(cache_path, allow_pickle=False) as cached:
-            cached_spots = cached["spot_ids"]
-            cached_embeddings = cached["embeddings"]
-        require_non_empty(
-            cached_embeddings,
-            stage="foundation_embedding_cache",
-            subject=f"cached embeddings for slide {slide_id}",
-            guidance="Regenerate a non-empty embedding cache for this slide.",
-        )
-        cache_metadata = pd.DataFrame(
-            {
-                "slide_id": [slide_id] * len(cached_spots),
-                "spot_id": cached_spots.tolist(),
-            }
-        )
-        aligned_labels = align_labels_with_metadata(
-            labels,
-            cache_metadata,
-            stage="foundation_embedding_cache",
-            expected_slide_id=slide_id,
-            value_row_count=len(cached_embeddings),
-        )
-        cache_rows = aligned_labels["_patch_source_row"].to_numpy(dtype=np.int64)
-        return cached_embeddings[cache_rows], aligned_labels
+    if use_cache:
+        try:
+            admission = admit_artifact(
+                cache_path,
+                expected_kind="embedding",
+                expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["embedding"],
+                expected_fingerprint=_embedding_fingerprint(
+                    slide_id, expected_spots, cfg
+                ),
+                reader=lambda candidate: _read_embedding_cache(
+                    candidate,
+                    expected_spots=expected_spots,
+                    expected_dim=expected_spec.embedding_dim,
+                ),
+            )
+        except ArtifactValidationError as exc:
+            if exc.reason_code not in {
+                "missing_payload",
+                "legacy_artifact",
+                "stale_fingerprint",
+            }:
+                raise
+        else:
+            (cached_embeddings, cached_spots), observed_schema = admission.value
+            if json.loads(admission.manifest.payload_schema_json) != observed_schema:
+                raise ArtifactValidationError(
+                    "payload_schema_mismatch",
+                    artifact_kind="embedding",
+                    basename=cache_path.name,
+                )
+            cache_metadata = pd.DataFrame(
+                {
+                    "slide_id": [slide_id] * len(cached_spots),
+                    "spot_id": cached_spots.tolist(),
+                }
+            )
+            aligned_labels = align_labels_with_metadata(
+                labels,
+                cache_metadata,
+                stage="foundation_embedding_cache",
+                expected_slide_id=slide_id,
+                value_row_count=len(cached_embeddings),
+            )
+            cache_rows = aligned_labels["_patch_source_row"].to_numpy(dtype=np.int64)
+            return cached_embeddings[cache_rows], aligned_labels
 
     patches, aligned_labels = load_slide_patches(slide_id, labels, cfg=cfg)
     # Force a fixed-width Unicode dtype so caches remain readable with
@@ -276,11 +468,23 @@ def load_or_extract_slide_embeddings(
             f"{embeddings.shape[1]} features; "
             f"expected {spec.embedding_dim}."
         )
+    embeddings = embeddings.astype(np.float32, copy=False)
+    if sorted(spot_ids.tolist()) != sorted(expected_spots):
+        raise IdentityValidationError(
+            stage="foundation_embedding_extraction",
+            issues=(
+                IdentityIssue(
+                    code="missing_key", side="metadata", count=len(expected_spots)
+                ),
+            ),
+        )
     if use_cache:
-        np.savez_compressed(
+        _publish_embedding_cache(
             cache_path,
-            embeddings=embeddings.astype(np.float32),
-            spot_ids=spot_ids,
+            embeddings,
+            spot_ids,
+            slide_id=slide_id,
+            cfg=cfg,
         )
     return embeddings, aligned_labels
 
