@@ -12,11 +12,14 @@ import yaml
 from requests.exceptions import RequestException
 
 from . import bootstrap  # noqa: F401 — ensures repo root is on sys.path
+from .identity import validate_anndata_spot_identity
 from .validation import (
     ConfigValidationError,
     ValidationIssue,
+    finalize_preprocessing_resolution,
     require_non_empty,
     resolve_config,
+    resolve_post_qc_preprocessing,
 )
 from utils import st_helpers as st
 
@@ -106,15 +109,24 @@ def preprocess_slide(
     seed: int | None = None,
 ) -> Any:
     """Run tutorial-equivalent QC + clustering pipeline on one slide."""
-    import scanpy as sc
-
     if cfg is None:
         cfg = load_config()
+    else:
+        cfg = resolve_config(cfg).to_dict()
+    validate_anndata_spot_identity(
+        adata,
+        sample_id,
+        stage="preprocess_slide_source_identity",
+    )
+
+    import scanpy as sc
+
     prep = cfg["preprocessing"]
     seed = seed if seed is not None else cfg.get("seed", st.SEED)
     st.set_seeds(seed)
 
     adata = adata.copy()
+    input_spots, input_genes = int(adata.n_obs), int(adata.n_vars)
     prefix = _mito_prefix(adata)
     adata.var["mt"] = adata.var_names.str.startswith(prefix)
 
@@ -122,8 +134,29 @@ def preprocess_slide(
         adata, qc_vars=["mt"], percent_top=None, log1p=True, inplace=True
     )
     sc.pp.filter_cells(adata, min_counts=prep["min_counts"])
+    after_filter_cells_spots = int(adata.n_obs)
+    after_filter_cells_genes = int(adata.n_vars)
     sc.pp.filter_genes(adata, min_cells=prep["min_cells"])
+    after_filter_genes_spots = int(adata.n_obs)
+    after_filter_genes_genes = int(adata.n_vars)
     adata = adata[adata.obs["pct_counts_mt"] < prep["max_pct_mito"]].copy()
+    post_qc_spots, post_qc_genes = int(adata.n_obs), int(adata.n_vars)
+
+    resolution = resolve_post_qc_preprocessing(
+        slide_id=sample_id,
+        input_spots=input_spots,
+        input_genes=input_genes,
+        after_filter_cells_spots=after_filter_cells_spots,
+        after_filter_cells_genes=after_filter_cells_genes,
+        after_filter_genes_spots=after_filter_genes_spots,
+        after_filter_genes_genes=after_filter_genes_genes,
+        post_qc_spots=post_qc_spots,
+        post_qc_genes=post_qc_genes,
+        requested_hvg=prep["n_top_genes_hvg"],
+        requested_pcs=prep["n_pcs"],
+        requested_neighbors=prep["n_neighbors"],
+        requested_graph_pcs=prep["n_pcs_neighbors"],
+    )
 
     adata.layers["counts"] = adata.X.copy()
     sc.pp.normalize_total(adata, target_sum=1e4)
@@ -131,18 +164,26 @@ def preprocess_slide(
     adata.raw = adata
 
     sc.pp.highly_variable_genes(
-        adata, n_top_genes=prep["n_top_genes_hvg"], flavor="seurat"
+        adata,
+        n_top_genes=resolution.to_dict()["resolved"]["hvg_call"],
+        flavor="seurat",
     )
+    actual_hvgs = int(adata.var["highly_variable"].sum())
+    resolution = finalize_preprocessing_resolution(
+        resolution,
+        actual_hvgs=actual_hvgs,
+    )
+    resolved = resolution.to_dict()["resolved"]
     adata_hvg = adata[:, adata.var["highly_variable"]].copy()
     sc.pp.scale(adata_hvg, max_value=10)
-    sc.pp.pca(adata_hvg, n_comps=prep["n_pcs"], random_state=seed)
+    sc.pp.pca(adata_hvg, n_comps=resolved["pca"], random_state=seed)
     adata.obsm["X_pca"] = adata_hvg.obsm["X_pca"]
     adata.uns["pca"] = adata_hvg.uns["pca"]
 
     sc.pp.neighbors(
         adata,
-        n_neighbors=prep["n_neighbors"],
-        n_pcs=prep["n_pcs_neighbors"],
+        n_neighbors=resolved["neighbors"],
+        n_pcs=resolved["graph_pcs"],
         random_state=seed,
     )
     sc.tl.umap(adata, random_state=seed)
@@ -153,6 +194,7 @@ def preprocess_slide(
         seed=seed,
     )
     adata.obs["slide_id"] = sample_id
+    adata.uns["spatial_pharma_preprocessing"] = resolution.to_dict()
     return adata
 
 

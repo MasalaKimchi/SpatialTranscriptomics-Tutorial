@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import json
+import sys
+from types import SimpleNamespace
 
+import anndata as ad
+import numpy as np
+import pandas as pd
 import pytest
+import yaml
 
+from src import data
+from src.identity import IdentityValidationError
 from src.validation import (
     PreprocessingValidationError,
     finalize_preprocessing_resolution,
@@ -13,6 +21,14 @@ from src.validation import (
 )
 
 pytestmark = pytest.mark.offline
+
+CONFIG_PATH = __import__("pathlib").Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+
+
+def _valid_config():
+    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg["preprocessing"].update(min_counts=1, min_cells=1, max_pct_mito=100)
+    return cfg
 
 
 def _resolve(**overrides):
@@ -128,3 +144,122 @@ def test_resolver_rejects_non_exact_primitive_before_arithmetic(field: str) -> N
     with pytest.raises(PreprocessingValidationError) as caught:
         _resolve(**{field: HostileInt(4)})
     assert caught.value.reason_code == "invalid_preprocessing_input"
+
+
+def _fake_scanpy(call_log: list[tuple[str, dict[str, object]]], actual_hvgs: int = 4):
+    def record(name, mutation=None):
+        def call(adata, **kwargs):
+            call_log.append((name, kwargs.copy()))
+            if mutation is not None:
+                mutation(adata, kwargs)
+        return call
+
+    def qc(adata, _kwargs):
+        adata.obs["pct_counts_mt"] = np.zeros(adata.n_obs)
+
+    def hvg(adata, _kwargs):
+        mask = np.zeros(adata.n_vars, dtype=bool)
+        mask[: min(actual_hvgs, adata.n_vars)] = True
+        adata.var["highly_variable"] = mask
+
+    def pca(adata, kwargs):
+        adata.obsm["X_pca"] = np.zeros((adata.n_obs, kwargs["n_comps"]))
+        adata.uns["pca"] = {"variance": np.ones(kwargs["n_comps"])}
+
+    pp = SimpleNamespace(
+        calculate_qc_metrics=record("qc", qc),
+        filter_cells=record("filter_cells"),
+        filter_genes=record("filter_genes"),
+        normalize_total=record("normalize_total"),
+        log1p=record("log1p"),
+        highly_variable_genes=record("hvg", hvg),
+        scale=record("scale"),
+        pca=record("pca", pca),
+        neighbors=record("neighbors"),
+    )
+    return SimpleNamespace(pp=pp, tl=SimpleNamespace(umap=record("umap")))
+
+
+def test_scanpy_orchestration_passes_finalized_values_once(monkeypatch, synthetic_anndata_factory) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setitem(sys.modules, "scanpy", _fake_scanpy(calls, actual_hvgs=4))
+    monkeypatch.setattr(data.st, "set_seeds", lambda seed: calls.append(("seed", {"seed": seed})))
+    monkeypatch.setattr(data.st, "run_leiden", lambda adata, **kwargs: (calls.append(("leiden", kwargs)), adata.obs.__setitem__("clusters", "0")))
+    cfg = _valid_config()
+    cfg["preprocessing"].update(
+        n_top_genes_hvg=100,
+        n_pcs=50,
+        n_neighbors=50,
+        n_pcs_neighbors=30,
+    )
+
+    result = data.preprocess_slide(
+        synthetic_anndata_factory(n_spots=8, n_genes=8), "slide_a", cfg=cfg, seed=7
+    )
+
+    names = [name for name, _ in calls]
+    assert names == [
+        "seed", "qc", "filter_cells", "filter_genes", "normalize_total", "log1p",
+        "hvg", "scale", "pca", "neighbors", "umap", "leiden",
+    ]
+    by_name = {name: kwargs for name, kwargs in calls}
+    assert by_name["hvg"]["n_top_genes"] == 8
+    assert by_name["pca"]["n_comps"] == 3
+    assert by_name["neighbors"]["n_neighbors"] == 7
+    assert by_name["neighbors"]["n_pcs"] == 3
+    assert result.uns["spatial_pharma_preprocessing"]["counts"]["actual_hvgs"] == 4
+    assert {"counts", "raw", "X_pca", "pca", "clusters"} <= {
+        *result.layers.keys(), *result.obsm.keys(), *result.uns.keys(), *result.obs.columns,
+        "raw" if result.raw is not None else "",
+    }
+
+
+def test_config_and_identity_guard_before_scanpy_import_copy_or_seed(monkeypatch, synthetic_anndata_factory) -> None:
+    class CopyForbidden:
+        obs_names = pd.Index(["spot_a", None], dtype=object)
+
+        def copy(self):
+            raise AssertionError("copy reached")
+
+    monkeypatch.delitem(sys.modules, "scanpy", raising=False)
+    real_import = __import__("builtins").__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "scanpy":
+            raise AssertionError("scanpy import reached")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", guarded_import)
+    monkeypatch.setattr(data.st, "set_seeds", lambda *_args: (_ for _ in ()).throw(AssertionError("seed reached")))
+
+    bad_cfg = _valid_config()
+    bad_cfg["preprocessing"]["n_pcs"] = 0
+    with pytest.raises(Exception):
+        data.preprocess_slide(synthetic_anndata_factory(), "slide_a", cfg=bad_cfg)
+    with pytest.raises(IdentityValidationError):
+        data.preprocess_slide(CopyForbidden(), "slide_a", cfg=_valid_config())
+
+
+def test_preprocessing_metadata_h5ad_round_trip(tmp_path, monkeypatch, synthetic_anndata_factory) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setitem(sys.modules, "scanpy", _fake_scanpy(calls, actual_hvgs=4))
+    monkeypatch.setattr(data.st, "set_seeds", lambda _seed: None)
+    monkeypatch.setattr(data.st, "run_leiden", lambda adata, **_kwargs: adata.obs.__setitem__("clusters", "0"))
+    result = data.preprocess_slide(
+        synthetic_anndata_factory(n_spots=8, n_genes=8), "slide_a", cfg=_valid_config()
+    )
+    expected = result.uns["spatial_pharma_preprocessing"]
+    canonical = json.dumps(expected, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    result.obs_names = pd.Index(result.obs_names.to_numpy(dtype=object), dtype=object)
+    result.var_names = pd.Index(result.var_names.to_numpy(dtype=object), dtype=object)
+    result.obs["slide_id"] = result.obs["slide_id"].astype(object)
+    result.obs["clusters"] = result.obs["clusters"].astype(object)
+    raw = result.raw.to_adata()
+    raw.obs_names = pd.Index(raw.obs_names.to_numpy(dtype=object), dtype=object)
+    raw.var_names = pd.Index(raw.var_names.to_numpy(dtype=object), dtype=object)
+    result.raw = raw
+    path = tmp_path / "processed.h5ad"
+    result.write_h5ad(path)
+    restored = ad.read_h5ad(path).uns["spatial_pharma_preprocessing"]
+    assert restored == expected
+    assert json.dumps(expected, sort_keys=True, separators=(",", ":"), allow_nan=False) == canonical
