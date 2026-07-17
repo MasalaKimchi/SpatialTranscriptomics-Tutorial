@@ -99,6 +99,8 @@ from IPython.display import display
 from sklearn.metrics import confusion_matrix, silhouette_score
 
 from src.data import load_config, pharma_outputs_dir
+from src.eval import save_result_table
+from src.labels import load_label_table
 from src.foundation import foundation_model_spec, load_or_extract_slide_embeddings
 from src.foundation_eval import (
     DEFAULT_CANDIDATES,
@@ -126,7 +128,7 @@ print("Slides:", len(slides), "| models:", model_names, "| tasks:", tasks)
         code(
             """
 labels = pd.concat(
-    [pd.read_parquet(pharma_outputs_dir() / f"labels_{s}.parquet") for s in slides],
+    [load_label_table(s, cfg=cfg) for s in slides],
     ignore_index=True,
 )
 support = pd.crosstab(labels["slide_id"], labels["tme_class"])
@@ -204,7 +206,13 @@ for model_name in model_names:
         all_details[(model_name, task)] = details
 
 results = pd.concat(result_frames, ignore_index=True)
-results.to_csv(figure_dir / "nested_loso_results.csv", index=False)
+save_result_table(
+    results,
+    figure_dir / "nested_loso_results.csv",
+    table_name="nested_loso_results",
+    cfg=cfg,
+    upstream_lineage={"slides": slides, "models": model_names, "tasks": tasks},
+)
 display(results.round(3))
 """
         ),
@@ -224,7 +232,13 @@ summary = (
 )
 summary["f1_lift_vs_majority"] = summary["mean_macro_f1"] - summary["majority_macro_f1"]
 display(summary.round(3))
-summary.to_csv(figure_dir / "model_task_summary.csv", index=False)
+save_result_table(
+    summary,
+    figure_dir / "model_task_summary.csv",
+    table_name="model_task_summary",
+    cfg=cfg,
+    upstream_lineage={"nested_loso_results": "same-run-validated-table"},
+)
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 4.6), sharey=True)
 for ax, task in zip(axes, tasks):

@@ -49,6 +49,7 @@ NOTEBOOKS = {
         md("# 01 — Data Curation and Cohort QC\n\nDownload public Visium oncology slides and run tutorial-equivalent QC + Leiden clustering per slide."),
         code(SETUP),
         code("""from src.data import load_config, cohort_slide_ids, preprocess_cohort, cohort_summary, pharma_outputs_dir
+from src.eval import save_result_table
 
 cfg = load_config()
 all_slides = cohort_slide_ids(cfg)
@@ -62,7 +63,10 @@ list(paths.keys())
         code("""summary = cohort_summary(all_slides)
 display(summary)
 out = pharma_outputs_dir() / 'cohort_summary.csv'
-summary.to_csv(out, index=False)
+save_result_table(
+    summary, out, table_name='cohort_summary', cfg=cfg,
+    upstream_lineage={'slide_ids': all_slides},
+)
 print('Wrote', out)
 """),
         code("""import matplotlib.pyplot as plt
@@ -148,6 +152,7 @@ plt.show()
         code("""from src.data import load_config, pharma_outputs_dir
 from src.labels import build_labels_cohort
 from src.train import train_loso
+from src.eval import save_result_table
 import pandas as pd
 
 cfg = load_config()
@@ -164,7 +169,11 @@ for r in results:
 for r in results:
     for h in r['history']:
         rows.append({'fold': r['fold'], 'val_slide': r['val_slide'], **h})
-pd.DataFrame(rows).to_csv(pharma_outputs_dir() / 'training_history.csv', index=False)
+save_result_table(
+    pd.DataFrame(rows), pharma_outputs_dir() / 'training_history.csv',
+    table_name='training_history', cfg=cfg,
+    upstream_lineage={'folds': [r['fold'] for r in results]},
+)
 """),
         md("**Next:** `05_evaluation.ipynb`"),
     ],
@@ -175,6 +184,7 @@ pd.DataFrame(rows).to_csv(pharma_outputs_dir() / 'training_history.csv', index=F
 from src.data import load_config, cohort_slide_ids
 from src.labels import build_labels_cohort
 from src.benchmark import run_and_save_benchmark
+from src.eval import load_benchmark_report
 
 cfg = load_config()
 # Optional research-only arm (Kaiko non-commercial weights):
@@ -183,7 +193,7 @@ oncology = cfg['cohorts']['oncology']
 labels = build_labels_cohort(cohort_slide_ids(cfg), cfg=cfg)
 breast_labels = labels[labels['slide_id'].isin(oncology)]
 report_path, results = run_and_save_benchmark(oncology, breast_labels, cfg=cfg)
-pd.read_csv(report_path)
+load_benchmark_report(report_path, cfg=cfg)
 """),
         md("""### Frozen foundation-model arm
 

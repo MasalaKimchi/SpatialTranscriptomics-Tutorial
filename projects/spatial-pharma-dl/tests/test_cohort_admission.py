@@ -483,7 +483,17 @@ def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
         patch_reuse_status=lambda sid, cfg: SimpleNamespace(reusable=False),
         run_and_save_benchmark=benchmark_stage,
         evaluate_fold=lambda result: result,
-        pd=SimpleNamespace(read_csv=lambda path: report),
+        load_benchmark_report=lambda path, cfg: report,
+        save_json_result=lambda value, path, **kwargs: (
+            path.write_text(
+                json.dumps(value, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            or path
+        ),
+        save_result_table=lambda frame, path, **kwargs: (
+            frame.to_csv(path, index=False) or path
+        ),
     )
     monkeypatch.delenv("PHARMA_TRAIN_ONLY", raising=False)
     monkeypatch.setattr(runner, "load_config", lambda: cfg)

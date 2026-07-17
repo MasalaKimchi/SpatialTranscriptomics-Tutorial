@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -38,13 +38,17 @@ from src.validation import (  # noqa: E402
 def _load_stages() -> SimpleNamespace:
     """Load scientific and model stages only after final admission succeeds."""
     import matplotlib
-    import pandas as pd
 
     matplotlib.use("Agg")
 
     from src.benchmark import run_and_save_benchmark
     from src.data import cohort_summary
     from src.eval import evaluate_fold
+    from src.eval import (
+        load_benchmark_report,
+        save_json_result,
+        save_result_table,
+    )
     from src.labels import build_labels_cohort
     from src.patches import (
         build_patch_cohort,
@@ -56,11 +60,13 @@ def _load_stages() -> SimpleNamespace:
     from utils import st_helpers as st
 
     return SimpleNamespace(
-        pd=pd,
         st=st,
         run_and_save_benchmark=run_and_save_benchmark,
         cohort_summary=cohort_summary,
         evaluate_fold=evaluate_fold,
+        load_benchmark_report=load_benchmark_report,
+        save_json_result=save_json_result,
+        save_result_table=save_result_table,
         build_labels_cohort=build_labels_cohort,
         build_patch_cohort=build_patch_cohort,
         fit_reference_stain=fit_reference_stain,
@@ -159,17 +165,44 @@ def main() -> None:
 
     out_dir = pharma_outputs_dir()
     manifest_path = out_dir / "cohort_manifest.json"
-    manifest_path.write_text(final_admitted.manifest.canonical_json, encoding="utf-8")
+    stages.save_json_result(
+        final_admitted.manifest.to_dict(),
+        manifest_path,
+        result_name="cohort_manifest",
+        cfg=cfg,
+        upstream_lineage={
+            "admitted_slides": list(final_admitted.slide_ids),
+        },
+        artifact_kind="cohort_manifest",
+    )
     preprocessing_manifest_path = out_dir / "preprocessing_manifest.json"
-    preprocessing_manifest_path.write_text(
-        preprocessing_manifest.canonical_json,
-        encoding="utf-8",
+    stages.save_json_result(
+        preprocessing_manifest.to_dict(),
+        preprocessing_manifest_path,
+        result_name="preprocessing_manifest",
+        cfg=cfg,
+        upstream_lineage={
+            "cohort_manifest_sha256": hashlib.sha256(
+                final_admitted.manifest.canonical_json.encode("utf-8")
+            ).hexdigest(),
+        },
+        artifact_kind="preprocessing_manifest",
     )
 
     if not train_only:
         summary = stages.cohort_summary(all_slides)
         out = out_dir / "cohort_summary.csv"
-        summary.to_csv(out, index=False)
+        stages.save_result_table(
+            summary,
+            out,
+            table_name="cohort_summary",
+            cfg=cfg,
+            upstream_lineage={
+                "preprocessing_manifest_sha256": hashlib.sha256(
+                    preprocessing_manifest.canonical_json.encode("utf-8")
+                ).hexdigest(),
+            },
+        )
         print(summary.to_string())
         print("Wrote", out)
     print("Phase 2: Label engineering (harmonized TME + modules)")
@@ -213,7 +246,7 @@ def main() -> None:
             f"bal_acc={ev['balanced_accuracy']:.3f} mean_r={ev['mean_pearson_r']:.3f}"
         )
 
-    report = stages.pd.read_csv(report_path)
+    report = stages.load_benchmark_report(report_path, cfg=cfg)
     for row in report.query("model != 'cnn'").itertuples():
         print(
             f"  {row.model:<17} fold {row.fold} {row.val_slide[:30]}: "
@@ -248,7 +281,20 @@ def main() -> None:
             foundation_rows["mean_pearson_r"].mean()
         )
     summary_path = out_dir / f"experiment_{exp}_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    stages.save_json_result(
+        summary,
+        summary_path,
+        result_name="experiment_summary",
+        cfg=cfg,
+        upstream_lineage={
+            "report_content_sha256": hashlib.sha256(
+                report.to_csv(index=False).encode("utf-8")
+            ).hexdigest(),
+            "cohort_manifest_sha256": hashlib.sha256(
+                final_admitted.manifest.canonical_json.encode("utf-8")
+            ).hexdigest(),
+        },
+    )
     print("Wrote", report_path)
     print("Wrote", summary_path)
     print("=" * 60)
