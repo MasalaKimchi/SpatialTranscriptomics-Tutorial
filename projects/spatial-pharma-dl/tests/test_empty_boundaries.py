@@ -79,7 +79,7 @@ def test_label_cohort_empty_input_fails_before_output_directory(monkeypatch) -> 
 
 
 def test_label_empty_slide_frame_fails_before_writer(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(labels, "pharma_outputs_dir", lambda: tmp_path)
+    monkeypatch.setattr(labels, "pharma_outputs_dir", _forbidden)
     monkeypatch.setattr(
         labels,
         "build_labels_for_slide",
@@ -89,6 +89,26 @@ def test_label_empty_slide_frame_fails_before_writer(monkeypatch, tmp_path) -> N
 
     with pytest.raises(StageValidationError, match="label rows for slide slide_a"):
         labels.build_labels_cohort(["slide_a"], cfg={"unused": True})
+
+
+def test_label_later_empty_slide_publishes_no_partial_cohort(monkeypatch) -> None:
+    valid = pd.DataFrame(
+        {
+            "cluster": ["0"],
+            "domain_name": ["immune_enriched"],
+            "tme_class": ["immune_enriched"],
+        }
+    )
+
+    def build(slide_id, _cfg):
+        return valid if slide_id == "slide_a" else pd.DataFrame()
+
+    monkeypatch.setattr(labels, "build_labels_for_slide", build)
+    monkeypatch.setattr(labels, "pharma_outputs_dir", _forbidden)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _forbidden)
+
+    with pytest.raises(StageValidationError, match="label rows for slide slide_b"):
+        labels.build_labels_cohort(["slide_a", "slide_b"], cfg={"unused": True})
 
 
 def test_label_slide_generation_rejects_zero_rows(monkeypatch) -> None:
@@ -331,6 +351,24 @@ def test_train_fold_empty_member_fails_before_device_or_model(
         train.train_one_fold(["train"], "held", _fold_labels(), cfg=_fold_cfg())
 
 
+def test_train_fold_empty_regression_selection_fails_before_device_or_model(
+    monkeypatch,
+) -> None:
+    patches = np.ones((1, 3, 4, 4), dtype=np.float32)
+    no_targets = _fold_labels().drop(columns=["module_signal"])
+
+    def load_stub(slide_id, *_args, **_kwargs):
+        row = 0 if slide_id == "train" else 1
+        return patches, no_targets.iloc[[row]].reset_index(drop=True)
+
+    monkeypatch.setattr(train, "load_slide_patches", load_stub)
+    monkeypatch.setattr(train, "resolve_device", _forbidden)
+    monkeypatch.setattr(train, "build_model", _forbidden)
+
+    with pytest.raises(StageValidationError, match="regression_target_selection"):
+        train.train_one_fold(["train"], "held", no_targets, cfg=_fold_cfg())
+
+
 @pytest.mark.parametrize("empty_subject", ["train", "held"])
 def test_rf_fold_empty_member_fails_before_estimator(
     monkeypatch, empty_subject
@@ -484,3 +522,18 @@ def test_nested_loso_empty_cohort_fails_before_probe(monkeypatch) -> None:
         foundation_eval.nested_loso_classification(
             [], {}, task="confident_3class"
         )
+
+
+def test_nested_loso_requires_three_slides_before_task_preprocessing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(foundation_eval, "prepare_classification_task", _forbidden)
+    monkeypatch.setattr(foundation_eval, "_fit_probe", _forbidden)
+
+    with pytest.raises(StageValidationError, match="nested_loso_admission") as caught:
+        foundation_eval.nested_loso_classification(
+            ["slide_a", "slide_b"],
+            {"slide_a": object(), "slide_b": object()},  # type: ignore[arg-type]
+            task="confident_3class",
+        )
+    assert caught.value.minimum == 3

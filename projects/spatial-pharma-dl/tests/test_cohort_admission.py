@@ -12,10 +12,12 @@ from types import SimpleNamespace
 import pytest
 import pandas as pd
 import yaml
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from src.validation import (
     AdmittedRun,
     CohortAdmissionError,
+    CohortAdmissionInputError,
     CohortManifest,
     SlideAdmission,
     StageValidationError,
@@ -121,6 +123,50 @@ def test_manifest_json_is_deterministic_safe_and_mutation_isolated() -> None:
     assert mutable != pristine
 
 
+def test_admission_sanitizes_hostile_string_details_before_manifest_return() -> None:
+    admitted = admit_run(
+        _config(allow_partial=True),
+        available_slide_ids={"oncology_b", "oncology_a", "benchmark_a"},
+        failures={
+            "external_a": (
+                "Traceback (most recent call last): /Users/private/token "
+                "RuntimeError: secret"
+            )
+        },
+    )
+
+    manifest = admitted.manifest.to_dict()
+    assert manifest["failed"] == [
+        {
+            "cohort": "external",
+            "reason": (
+                "Source acquisition failed for the configured slide; verify "
+                "network access and the public dataset identifier before retrying."
+            ),
+            "reason_code": "source_load_failed",
+            "slide_id": "external_a",
+            "status": "failed",
+        }
+    ]
+    assert "traceback" not in admitted.manifest.canonical_json.lower()
+    assert "/users/" not in admitted.manifest.canonical_json.lower()
+
+
+@pytest.mark.parametrize(
+    "failures",
+    [
+        {"unknown_slide": "failed"},
+        {1: "failed"},
+        {"external_a": Path("/private/source")},
+    ],
+)
+def test_admission_rejects_unknown_ids_and_non_string_failure_details(
+    failures: dict[object, object],
+) -> None:
+    with pytest.raises(CohortAdmissionInputError):
+        admit_run(_config(allow_partial=True), failures=failures)  # type: ignore[arg-type]
+
+
 def _load_runner():
     spec = importlib.util.spec_from_file_location("cohort_admission_runner", RUNNER_PATH)
     assert spec is not None and spec.loader is not None
@@ -145,6 +191,33 @@ def test_local_availability_scan_does_not_create_directories(
     monkeypatch.setattr(data.st, "project_root", lambda: tmp_path)
     assert data.available_processed_slide_ids(["slide/a", "slide_b"]) == set()
     assert not (tmp_path / "data").exists()
+
+
+def test_preprocess_cohort_wraps_only_documented_source_acquisition_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src import data
+
+    monkeypatch.setattr(data, "pharma_processed_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        data.st,
+        "load_visium_sample",
+        lambda _sid: (_ for _ in ()).throw(RequestsConnectionError("private host")),
+    )
+
+    with pytest.raises(data.SourceAcquisitionError) as caught:
+        data.preprocess_cohort(["slide_a"], cfg={"unused": True})
+    assert isinstance(caught.value.__cause__, RequestsConnectionError)
+    assert "private host" not in str(caught.value)
+
+    monkeypatch.setattr(data.st, "load_visium_sample", lambda _sid: object())
+    monkeypatch.setattr(
+        data,
+        "preprocess_slide",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("writer failed")),
+    )
+    with pytest.raises(OSError, match="writer failed"):
+        data.preprocess_cohort(["slide_a"], cfg={"unused": True})
 
 
 def test_runner_resolves_quick_and_foundation_overrides_before_admission(
@@ -182,11 +255,14 @@ def test_runner_strict_source_failure_has_no_false_success(
     monkeypatch.delenv("PHARMA_QUICK", raising=False)
     monkeypatch.delenv("PHARMA_FOUNDATION", raising=False)
     monkeypatch.setattr(runner, "load_config", lambda: cfg)
-    monkeypatch.setattr(
-        runner,
-        "preprocess_cohort",
-        lambda ids, cfg: (_ for _ in ()).throw(RuntimeError("host-specific detail")),
-    )
+    attempted: list[str] = []
+
+    def preprocess(ids, cfg):
+        attempted.extend(ids)
+        if ids == ["oncology_b"]:
+            raise runner.SourceAcquisitionError("host-specific detail")
+
+    monkeypatch.setattr(runner, "preprocess_cohort", preprocess)
     monkeypatch.setattr(
         runner, "_load_stages", lambda: (_ for _ in ()).throw(AssertionError("stage"))
     )
@@ -198,11 +274,44 @@ def test_runner_strict_source_failure_has_no_false_success(
 
     with pytest.raises(CohortAdmissionError) as caught:
         runner.main()
-    assert caught.value.manifest.failed[0].slide_id == "oncology_b"
-    assert caught.value.manifest.failed[0].reason_code == "source_load_failed"
-    assert "host-specific detail" not in caught.value.manifest.canonical_json
+    manifest = caught.value.manifest
+    assert attempted == ["oncology_b", "oncology_a", "external_a", "benchmark_a"]
+    assert [item.slide_id for item in manifest.configured] == attempted
+    assert [item.slide_id for item in manifest.included] == [
+        "oncology_a",
+        "external_a",
+        "benchmark_a",
+    ]
+    assert [item.slide_id for item in manifest.skipped] == ["oncology_b"]
+    assert [item.slide_id for item in manifest.failed] == ["oncology_b"]
+    assert manifest.failed[0].reason_code == "source_load_failed"
+    assert "host-specific detail" not in manifest.canonical_json
+    assert isinstance(caught.value.__cause__, runner.SourceAcquisitionError)
     assert "Pipeline complete." not in capsys.readouterr().out
     assert not (tmp_path / "cohort_manifest.json").exists()
+
+
+def test_runner_does_not_convert_programming_or_storage_defects_to_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_runner()
+    cfg = _config(allow_partial=True)
+    attempted: list[str] = []
+
+    def broken_preprocess(ids, cfg):
+        attempted.extend(ids)
+        raise OSError("disk write failed")
+
+    monkeypatch.setattr(runner, "preprocess_cohort", broken_preprocess)
+    monkeypatch.setattr(
+        runner,
+        "admit_run",
+        lambda *_args, **_kwargs: pytest.fail("storage error became admission policy"),
+    )
+
+    with pytest.raises(OSError, match="disk write failed"):
+        runner._curate_sources(cfg, ["oncology_b", "oncology_a"])
+    assert attempted == ["oncology_b"]
 
 
 def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
@@ -225,7 +334,7 @@ def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
     def preprocess(ids, cfg):
         attempted.extend(ids)
         if ids == ["external_a"]:
-            raise RuntimeError("source failed")
+            raise runner.SourceAcquisitionError("source failed")
 
     seen: dict[str, object] = {}
 

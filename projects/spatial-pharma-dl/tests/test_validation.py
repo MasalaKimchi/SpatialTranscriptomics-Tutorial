@@ -107,6 +107,42 @@ def test_non_finite_and_unsupported_values_fail_closed(
     assert expected_path in {issue.path for issue in caught.value.issues}
 
 
+def test_oversized_integer_stays_inside_aggregate_failure_boundary() -> None:
+    cfg = _valid_config()
+    cfg["training"]["lr"] = 10**10000
+    cfg["training"]["batch_size"] = False
+
+    with pytest.raises(ConfigValidationError) as caught:
+        resolve_config(cfg)
+
+    assert [issue.path for issue in caught.value.issues] == [
+        "training.batch_size",
+        "training.lr",
+        "config.training.lr",
+    ]
+    assert "<oversized integer>" in str(caught.value)
+
+
+def test_hostile_repr_is_never_executed_while_reporting_invalid_values() -> None:
+    class Hostile:
+        def __repr__(self) -> str:
+            raise AssertionError("validation executed hostile repr")
+
+    cfg = _valid_config()
+    cfg["training"]["lr"] = Hostile()
+    cfg[Hostile()] = "invalid key"
+
+    with pytest.raises(ConfigValidationError) as caught:
+        resolve_config(cfg)
+
+    assert "<Hostile>" in str(caught.value)
+    assert {issue.path for issue in caught.value.issues} >= {
+        "config.<key>",
+        "training.lr",
+        "config.training.lr",
+    }
+
+
 def test_canonical_json_sorts_mappings_but_preserves_cohort_lists() -> None:
     first = _valid_config()
     second = {key: first[key] for key in reversed(first)}
