@@ -481,9 +481,13 @@ def test_runner_partial_remote_outcomes_are_readmitted_once_and_propagated(
         save_patch_index=lambda labels, **_kwargs: tmp_path / "patch_index.parquet",
         patch_cache_path=lambda sid, cfg: tmp_path / "unused",
         patch_reuse_status=lambda sid, cfg: SimpleNamespace(reusable=False),
-        run_and_save_benchmark=benchmark_stage,
-        evaluate_fold=lambda result: result,
-        load_benchmark_report=lambda path, cfg: report,
+            run_and_save_benchmark=benchmark_stage,
+            benchmark_report_expectations=lambda ids, results, cfg: (
+                {"test_lineage": ids},
+                [[cfg["experiment"], "cnn", 0, ids[0]]],
+            ),
+            evaluate_fold=lambda result: result,
+            load_benchmark_report=lambda path, cfg, **_kwargs: report,
         save_json_result=lambda value, path, **kwargs: (
             path.write_text(
                 json.dumps(value, sort_keys=True, separators=(",", ":")),

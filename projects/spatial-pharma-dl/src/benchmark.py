@@ -163,25 +163,53 @@ def run_and_save_benchmark(
     """Run the configured benchmark and write its versioned report."""
     rows, cnn_results = run_loso_benchmark(slide_ids, labels, cfg=cfg)
     resolved = load_config() if cfg is None else cfg
-    from .labels import _table_fingerprint
-    from .patches import _patch_fingerprint
 
-    checkpoints = []
-    for result in cnn_results:
-        checkpoint_path = Path(result["model_path"])
-        manifest = read_artifact_manifest(checkpoint_path)
-        checkpoints.append(manifest.fingerprint.digest)
+    lineage, _identity = benchmark_report_expectations(
+        slide_ids, cnn_results, cfg=resolved
+    )
     report_path = save_benchmark_report(
         rows,
         path=path,
         cfg=resolved,
-        upstream_lineage={
-            "checkpoints": checkpoints,
-            "labels": [
-                _table_fingerprint("label_table", [sid], resolved).digest
-                for sid in slide_ids
-            ],
-            "patches": [_patch_fingerprint(sid, resolved).digest for sid in slide_ids],
-        },
+        upstream_lineage=lineage,
     )
     return report_path, cnn_results
+
+
+def benchmark_report_expectations(
+    slide_ids: list[str],
+    cnn_results: list[dict[str, Any]],
+    *,
+    cfg: dict[str, Any],
+) -> tuple[dict[str, object], list[list[object]]]:
+    """Derive current report lineage and row identity without reading its sidecar."""
+    from .labels import _table_fingerprint
+    from .patches import _patch_fingerprint
+
+    checkpoints = [
+        read_artifact_manifest(Path(result["model_path"])).fingerprint.digest
+        for result in cnn_results
+    ]
+    lineage: dict[str, object] = {
+        "checkpoints": checkpoints,
+        "labels": [
+            _table_fingerprint("label_table", [sid], cfg).digest for sid in slide_ids
+        ],
+        "patches": [_patch_fingerprint(sid, cfg).digest for sid in slide_ids],
+    }
+    experiment = cfg.get("experiment", "v2")
+    rows: list[list[object]] = []
+    rows.extend(
+        [experiment, "cnn", result["fold"], result["val_slide"]]
+        for result in cnn_results
+    )
+    rows.extend(
+        [experiment, "rf", fold, val_slide]
+        for fold, (_train_slides, val_slide) in enumerate(loso_folds(slide_ids))
+    )
+    if cfg.get("foundation", {}).get("enabled", False):
+        rows.extend(
+            [experiment, "foundation_linear", fold, val_slide]
+            for fold, (_train_slides, val_slide) in enumerate(loso_folds(slide_ids))
+        )
+    return lineage, rows

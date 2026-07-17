@@ -92,8 +92,12 @@ def test_pipeline_inventory_has_exactly_nineteen_contract_bound_kinds():
 def test_summary_reader_rejects_mixed_and_truncated_generations(tmp_path):
     cfg = data.load_config()
     path = tmp_path / "training_history.csv"
-    first = pd.DataFrame({"fold": [0], "train_loss": [1.0], "val_loss": [2.0]})
-    second = pd.DataFrame({"fold": [1], "train_loss": [0.5], "val_loss": [1.0]})
+    first = pd.DataFrame(
+        {"fold": [0], "val_slide": ["slide_a"], "epoch": [0], "train_loss": [1.0], "val_loss": [2.0]}
+    )
+    second = pd.DataFrame(
+        {"fold": [1], "val_slide": ["slide_b"], "epoch": [0], "train_loss": [0.5], "val_loss": [1.0]}
+    )
     evaluation.save_result_table(
         first, path, table_name="training_history", cfg=cfg,
         upstream_lineage={"checkpoint": "old"},
@@ -104,8 +108,11 @@ def test_summary_reader_rejects_mixed_and_truncated_generations(tmp_path):
         upstream_lineage={"checkpoint": "new"},
     )
     manifest_path(path).write_bytes(old_manifest)
-    with pytest.raises(ArtifactValidationError, match="checksum_mismatch"):
-        evaluation.load_result_table(path, table_name="training_history", cfg=cfg)
+    with pytest.raises(ArtifactValidationError, match="stale_fingerprint"):
+        evaluation.load_result_table(
+            path, table_name="training_history", cfg=cfg,
+            upstream_lineage={"checkpoint": "new"}, expected_rows=1,
+        )
 
     evaluation.save_result_table(
         second, path, table_name="training_history", cfg=cfg,
@@ -113,7 +120,10 @@ def test_summary_reader_rejects_mixed_and_truncated_generations(tmp_path):
     )
     path.write_bytes(path.read_bytes()[:8])
     with pytest.raises(ArtifactValidationError):
-        evaluation.load_result_table(path, table_name="training_history", cfg=cfg)
+        evaluation.load_result_table(
+            path, table_name="training_history", cfg=cfg,
+            upstream_lineage={"checkpoint": "new"}, expected_rows=1,
+        )
 
 
 _RAW_IO_PATTERN = re.compile(

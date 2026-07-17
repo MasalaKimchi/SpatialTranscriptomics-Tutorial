@@ -26,7 +26,14 @@ from .labels import classification_column, regression_columns
 from .models import get_gradcam_layer
 from .patches import patch_features
 from .transforms import imagenet_normalize
-from .validation import StageValidationError, require_non_empty, resolve_config
+from .validation import (
+    CohortManifest,
+    PreprocessingManifest,
+    SlideAdmission,
+    StageValidationError,
+    require_non_empty,
+    resolve_config,
+)
 from utils.artifacts import (
     ARTIFACT_CONTRACT_VERSIONS,
     ArtifactFingerprint,
@@ -374,26 +381,28 @@ def _report_fingerprint(
 
 
 def _manifest_expected_fingerprint(
-    path: Path,
     *,
     kind: str,
     cfg: dict[str, Any],
-    upstream_lineage: dict[str, object] | None = None,
+    source: dict[str, object],
+    upstream_lineage: dict[str, object],
+    identity: dict[str, object],
 ):
-    parsed = read_artifact_manifest(path)
-    inputs = parsed.fingerprint.to_dict()["inputs"]
-    inputs["configuration"] = cfg
-    if upstream_lineage is not None:
-        inputs["upstream"] = upstream_lineage
     return build_fingerprint(
         kind,
         {
-            "configuration": inputs["configuration"],
-            "source": inputs["source"],
-            "upstream": inputs["upstream"],
-            "identity": inputs["identity"],
+            "configuration": cfg,
+            "source": source,
+            "upstream": upstream_lineage,
+            "identity": identity,
         },
     )
+
+
+def _require_lineage(value: object, *, kind: str) -> dict[str, object]:
+    if type(value) is not dict or not value:
+        raise ArtifactValidationError("missing_expected_lineage", artifact_kind=kind)
+    return value
 
 
 def load_benchmark_report(
@@ -401,13 +410,21 @@ def load_benchmark_report(
     cfg: dict[str, Any] | None = None,
     *,
     upstream_lineage: dict[str, object] | None = None,
+    expected_row_identity: list[list[object]] | None = None,
 ) -> pd.DataFrame:
     """Load an exact benchmark table only after contract and lineage admission."""
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
     if path is None:
         path = pharma_outputs_dir() / f"benchmark_report_{resolved.get('experiment', 'v2')}.csv"
+    lineage = _require_lineage(upstream_lineage, kind="report")
+    if type(expected_row_identity) is not list or not expected_row_identity:
+        raise ArtifactValidationError("missing_expected_lineage", artifact_kind="report")
     expected = _manifest_expected_fingerprint(
-        path, kind="report", cfg=resolved, upstream_lineage=upstream_lineage
+        kind="report",
+        cfg=resolved,
+        source={"report_schema": list(BENCHMARK_REPORT_COLUMNS)},
+        upstream_lineage=lineage,
+        identity={"rows": expected_row_identity},
     )
     admission = admit_artifact(
         path,
@@ -424,14 +441,47 @@ def load_benchmark_report(
     return frame
 
 
+_RESULT_TABLE_COLUMNS = {
+    "cohort_summary": (
+        "slide_id", "n_spots", "n_genes", "n_clusters", "median_genes",
+        "median_counts", "median_mito_pct",
+    ),
+    "training_history": ("fold", "val_slide", "epoch", "train_loss", "val_loss"),
+    "nested_loso_results": (
+        "model", "fold", "held_out_slide", "task", "n_train", "n_test",
+        "coverage", "selected_candidate", "inner_macro_f1", "accuracy",
+        "macro_f1", "balanced_accuracy", "majority_macro_f1",
+        "majority_balanced_accuracy",
+    ),
+    "model_task_summary": (
+        "task", "model", "mean_macro_f1", "min_macro_f1",
+        "mean_balanced_accuracy", "majority_macro_f1", "mean_coverage",
+        "f1_lift_vs_majority",
+    ),
+}
+
+_INTEGER_TABLE_COLUMNS = {"fold", "epoch", "n_spots", "n_genes", "n_clusters", "n_train", "n_test"}
+
+
 def _result_table_schema(frame: pd.DataFrame, table_name: str) -> dict[str, object]:
     columns = frame.columns.tolist()
-    if type(table_name) is not str or not table_name or frame.empty:
+    expected_columns = _RESULT_TABLE_COLUMNS.get(table_name)
+    if expected_columns is None or columns != list(expected_columns) or frame.empty:
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
     if any(type(column) is not str or not column for column in columns) or len(columns) != len(set(columns)):
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
     if frame.isnull().any().any():
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    for column in columns:
+        if column in _INTEGER_TABLE_COLUMNS:
+            if not pd.api.types.is_integer_dtype(frame[column]) or (frame[column] < 0).any():
+                raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+        elif column not in {"slide_id", "val_slide", "held_out_slide", "task", "model", "selected_candidate"}:
+            if not pd.api.types.is_numeric_dtype(frame[column]):
+                raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    for column in set(columns) & {"slide_id", "val_slide", "held_out_slide", "task", "model", "selected_candidate"}:
+        if any(type(value) is not str or not value for value in frame[column].tolist()):
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
     numeric_columns = [column for column in columns if pd.api.types.is_numeric_dtype(frame[column])]
     if numeric_columns and not np.isfinite(frame[numeric_columns].to_numpy(dtype=np.float64)).all():
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
@@ -491,21 +541,32 @@ def load_result_table(
     table_name: str,
     cfg: dict[str, Any] | None = None,
     upstream_lineage: dict[str, object] | None = None,
+    expected_rows: int | None = None,
 ) -> pd.DataFrame:
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    lineage = _require_lineage(upstream_lineage, kind="summary")
+    if type(expected_rows) is not int or expected_rows < 1:
+        raise ArtifactValidationError("missing_expected_lineage", artifact_kind="summary")
+    columns = _RESULT_TABLE_COLUMNS.get(table_name)
+    if columns is None:
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
     expected = _manifest_expected_fingerprint(
-        path, kind="summary", cfg=resolved, upstream_lineage=upstream_lineage
+        kind="summary",
+        cfg=resolved,
+        source={"table_name": table_name, "columns": list(columns)},
+        upstream_lineage=lineage,
+        identity={"rows": expected_rows},
     )
     parsed = read_artifact_manifest(path)
     declared = json.loads(parsed.payload_schema_json)
-    if declared.get("table_name") != table_name or type(declared.get("columns")) is not list:
+    if declared.get("table_name") != table_name or declared.get("columns") != list(columns):
         raise ArtifactValidationError("payload_schema_mismatch", artifact_kind="summary", basename=path.name)
     admission = admit_artifact(
         path,
         expected_kind="summary",
         expected_contract_version=ARTIFACT_CONTRACT_VERSIONS["summary"],
         expected_fingerprint=expected,
-        reader=lambda candidate: _read_result_table(candidate, table_name, declared["columns"]),
+        reader=lambda candidate: _read_result_table(candidate, table_name, list(columns)),
     )
     frame, schema = admission.value
     if json.loads(admission.manifest.payload_schema_json) != schema:
@@ -529,7 +590,74 @@ def _json_payload(value: object, result_name: str) -> tuple[bytes, dict[str, obj
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary") from None
     if restored != value:
         raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+    _validate_named_json(value, result_name)
     return raw, {"result_name": result_name, "keys": sorted(value)}
+
+
+def _cohort_manifest(value: dict[str, object]) -> CohortManifest:
+    required = {"schema_version", "allow_partial", "configured", "included", "skipped", "failed"}
+    if set(value) != required or value["schema_version"] != "cohort-manifest-v1":
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+
+    def records(name: str) -> tuple[SlideAdmission, ...]:
+        raw = value[name]
+        if type(raw) is not list:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+        result = []
+        for item in raw:
+            if type(item) is not dict or set(item) != {"slide_id", "cohort", "status", "reason_code", "reason"}:
+                raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+            result.append(SlideAdmission(**item))
+        return tuple(result)
+
+    manifest = CohortManifest(
+        schema_version="cohort-manifest-v1",
+        allow_partial=value["allow_partial"],
+        configured=records("configured"),
+        included=records("included"),
+        skipped=records("skipped"),
+        failed=records("failed"),
+    )
+    configured_ids = [record.slide_id for record in manifest.configured]
+    if (
+        type(value["allow_partial"]) is not bool
+        or len(configured_ids) != len(set(configured_ids))
+        or manifest.to_dict() != value
+    ):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+    partitions = (*manifest.included, *manifest.skipped, *manifest.failed)
+    if {item.slide_id for item in partitions} != set(configured_ids):
+        raise ArtifactValidationError("reader_validation_failed", artifact_kind="cohort_manifest")
+    return manifest
+
+
+def _validate_named_json(value: dict[str, object], result_name: str) -> None:
+    if result_name == "cohort_manifest":
+        _cohort_manifest(value)
+        return
+    if result_name == "preprocessing_manifest":
+        if set(value) != {"schema_version", "slide_ids", "records"} or value["schema_version"] != "spatial-pharma-preprocessing-manifest-v1":
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="preprocessing_manifest")
+        manifest = PreprocessingManifest(slide_ids=value["slide_ids"], records=value["records"])
+        if manifest.to_dict() != value:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="preprocessing_manifest")
+        return
+    if result_name == "experiment_summary":
+        required = {
+            "experiment", "classification_col", "regression_targets", "context_scale",
+            "patch_version", "cnn_mean_balanced_accuracy", "cnn_mean_pearson_r",
+            "rf_mean_balanced_accuracy", "rf_mean_pearson_r",
+        }
+        optional = {"foundation_mean_balanced_accuracy", "foundation_mean_pearson_r"}
+        if not required <= set(value) <= required | optional:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+        if type(value["experiment"]) is not str or type(value["classification_col"]) is not str or type(value["regression_targets"]) is not list or type(value["patch_version"]) is not str:
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+        numeric = (required | optional) - {"experiment", "classification_col", "regression_targets", "patch_version"}
+        if any(key in value and (type(value[key]) not in (int, float) or not np.isfinite(value[key])) for key in numeric):
+            raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
+        return
+    raise ArtifactValidationError("reader_validation_failed", artifact_kind="summary")
 
 
 def save_json_result(
@@ -588,10 +716,19 @@ def load_json_result(
     cfg: dict[str, Any] | None = None,
     upstream_lineage: dict[str, object] | None = None,
     artifact_kind: str = "summary",
+    expected_value: dict[str, object] | None = None,
 ) -> dict[str, object]:
     resolved = load_config() if cfg is None else resolve_config(cfg).to_dict()
+    lineage = _require_lineage(upstream_lineage, kind=artifact_kind)
+    if type(expected_value) is not dict:
+        raise ArtifactValidationError("missing_expected_lineage", artifact_kind=artifact_kind)
+    _raw, expected_schema = _json_payload(expected_value, result_name)
     expected = _manifest_expected_fingerprint(
-        path, kind=artifact_kind, cfg=resolved, upstream_lineage=upstream_lineage
+        kind=artifact_kind,
+        cfg=resolved,
+        source={"result_name": result_name, "inner_payload": expected_value},
+        upstream_lineage=lineage,
+        identity={"keys": expected_schema["keys"]},
     )
     parsed = read_artifact_manifest(path)
     declared = json.loads(parsed.payload_schema_json)
@@ -606,5 +743,7 @@ def load_json_result(
     )
     value, schema = admission.value
     if json.loads(admission.manifest.payload_schema_json) != schema:
+        raise ArtifactValidationError("payload_schema_mismatch", artifact_kind=artifact_kind, basename=path.name)
+    if value != expected_value:
         raise ArtifactValidationError("payload_schema_mismatch", artifact_kind=artifact_kind, basename=path.name)
     return value

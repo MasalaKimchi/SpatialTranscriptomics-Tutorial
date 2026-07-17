@@ -183,7 +183,7 @@ save_result_table(
         code("""import pandas as pd
 from src.data import load_config, cohort_slide_ids
 from src.labels import build_labels_cohort
-from src.benchmark import run_and_save_benchmark
+from src.benchmark import benchmark_report_expectations, run_and_save_benchmark
 from src.eval import load_benchmark_report
 
 cfg = load_config()
@@ -193,7 +193,11 @@ oncology = cfg['cohorts']['oncology']
 labels = build_labels_cohort(cohort_slide_ids(cfg), cfg=cfg)
 breast_labels = labels[labels['slide_id'].isin(oncology)]
 report_path, results = run_and_save_benchmark(oncology, breast_labels, cfg=cfg)
-load_benchmark_report(report_path, cfg=cfg)
+report_lineage, report_identity = benchmark_report_expectations(oncology, results, cfg=cfg)
+load_benchmark_report(
+    report_path, cfg=cfg, upstream_lineage=report_lineage,
+    expected_row_identity=report_identity,
+)
 """),
         md("""### Frozen foundation-model arm
 

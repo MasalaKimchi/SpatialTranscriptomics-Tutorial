@@ -41,7 +41,7 @@ def _load_stages() -> SimpleNamespace:
 
     matplotlib.use("Agg")
 
-    from src.benchmark import run_and_save_benchmark
+    from src.benchmark import benchmark_report_expectations, run_and_save_benchmark
     from src.data import cohort_summary
     from src.eval import evaluate_fold
     from src.eval import (
@@ -62,6 +62,7 @@ def _load_stages() -> SimpleNamespace:
     return SimpleNamespace(
         st=st,
         run_and_save_benchmark=run_and_save_benchmark,
+        benchmark_report_expectations=benchmark_report_expectations,
         cohort_summary=cohort_summary,
         evaluate_fold=evaluate_fold,
         load_benchmark_report=load_benchmark_report,
@@ -246,7 +247,15 @@ def main() -> None:
             f"bal_acc={ev['balanced_accuracy']:.3f} mean_r={ev['mean_pearson_r']:.3f}"
         )
 
-    report = stages.load_benchmark_report(report_path, cfg=cfg)
+    report_lineage, report_identity = stages.benchmark_report_expectations(
+        oncology, cnn_results, cfg=cfg
+    )
+    report = stages.load_benchmark_report(
+        report_path,
+        cfg=cfg,
+        upstream_lineage=report_lineage,
+        expected_row_identity=report_identity,
+    )
     for row in report.query("model != 'cnn'").itertuples():
         print(
             f"  {row.model:<17} fold {row.fold} {row.val_slide[:30]}: "

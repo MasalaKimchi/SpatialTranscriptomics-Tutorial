@@ -83,7 +83,7 @@ def test_regenerated_retained_outputs_use_named_artifact_adapters() -> None:
     assert "save_result_table(" in train_source
     assert "table_name='training_history'" in train_source
     assert "pd.DataFrame(rows).to_csv(" not in train_source
-    assert "load_benchmark_report(report_path, cfg=cfg)" in eval_source
+    assert "expected_row_identity=report_identity" in eval_source
     assert "pd.read_csv(report_path)" not in eval_source
     assert "load_label_table(s, cfg=cfg)" in foundation_source
     assert "pd.read_parquet(" not in foundation_source

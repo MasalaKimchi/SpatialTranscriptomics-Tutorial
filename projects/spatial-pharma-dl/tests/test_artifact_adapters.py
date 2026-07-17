@@ -212,7 +212,12 @@ def test_benchmark_report_round_trip_and_schema_rejection(tmp_path):
     evaluation.save_benchmark_report(
         rows, path=path, cfg=cfg, upstream_lineage={"checkpoints": ["abc"]}
     )
-    restored = evaluation.load_benchmark_report(path, cfg=cfg)
+    restored = evaluation.load_benchmark_report(
+        path,
+        cfg=cfg,
+        upstream_lineage={"checkpoints": ["abc"]},
+        expected_row_identity=[["v2_remediation", "cnn", 0, "slide_a"]],
+    )
     assert restored.columns.tolist() == [
         "model", "fold", "val_slide", "balanced_accuracy", "macro_f1",
         "mean_pearson_r", "mean_r2", "experiment",
@@ -223,7 +228,15 @@ def test_benchmark_report_round_trip_and_schema_rejection(tmp_path):
 
 def test_named_summary_table_and_json_round_trip(tmp_path):
     cfg = data.load_config()
-    table = pd.DataFrame({"fold": [0], "train_loss": [1.0], "val_loss": [2.0]})
+    table = pd.DataFrame(
+        {
+            "fold": [0],
+            "val_slide": ["slide_a"],
+            "epoch": [0],
+            "train_loss": [1.0],
+            "val_loss": [2.0],
+        }
+    )
     table_path = tmp_path / "training_history.csv"
     evaluation.save_result_table(
         table, table_path, table_name="training_history", cfg=cfg,
@@ -231,16 +244,88 @@ def test_named_summary_table_and_json_round_trip(tmp_path):
     )
     pd.testing.assert_frame_equal(
         evaluation.load_result_table(
-            table_path, table_name="training_history", cfg=cfg
+            table_path,
+            table_name="training_history",
+            cfg=cfg,
+            upstream_lineage={"checkpoints": ["abc"]},
+            expected_rows=1,
         ),
         table,
     )
     json_path = tmp_path / "experiment_v2_summary.json"
-    payload = {"experiment": "v2", "score": 0.5}
+    payload = {
+        "experiment": "v2",
+        "classification_col": "tme_class_id",
+        "regression_targets": ["gene_A"],
+        "context_scale": 1.0,
+        "patch_version": "v1",
+        "cnn_mean_balanced_accuracy": 0.5,
+        "cnn_mean_pearson_r": 0.4,
+        "rf_mean_balanced_accuracy": 0.3,
+        "rf_mean_pearson_r": 0.2,
+    }
     evaluation.save_json_result(
         payload, json_path, result_name="experiment_summary", cfg=cfg,
         upstream_lineage={"report": "abc"},
     )
     assert evaluation.load_json_result(
-        json_path, result_name="experiment_summary", cfg=cfg
+        json_path,
+        result_name="experiment_summary",
+        cfg=cfg,
+        upstream_lineage={"report": "abc"},
+        expected_value=payload,
     ) == payload
+
+
+def test_report_and_result_readers_require_current_independent_lineage(tmp_path):
+    cfg = data.load_config()
+    report_path = tmp_path / "benchmark.csv"
+    rows = [{
+        "model": "cnn", "fold": 0, "val_slide": "slide_a",
+        "balanced_accuracy": 0.5, "macro_f1": 0.4,
+        "mean_pearson_r": 0.3, "mean_r2": 0.2,
+    }]
+    evaluation.save_benchmark_report(
+        rows, path=report_path, cfg=cfg, upstream_lineage={"checkpoint": "current"}
+    )
+    identity = [["v2_remediation", "cnn", 0, "slide_a"]]
+    with pytest.raises(ArtifactValidationError, match="missing_expected_lineage"):
+        evaluation.load_benchmark_report(
+            report_path, cfg=cfg, expected_row_identity=identity
+        )
+    with pytest.raises(ArtifactValidationError, match="stale_fingerprint"):
+        evaluation.load_benchmark_report(
+            report_path,
+            cfg=cfg,
+            upstream_lineage={"checkpoint": "stale"},
+            expected_row_identity=identity,
+        )
+
+
+def test_named_schema_registry_rejects_unknown_and_malformed_payloads(tmp_path):
+    cfg = data.load_config()
+    with pytest.raises(ArtifactValidationError, match="reader_validation_failed"):
+        evaluation.save_result_table(
+            pd.DataFrame({"totally_wrong": [1]}),
+            tmp_path / "training_history.csv",
+            table_name="training_history",
+            cfg=cfg,
+            upstream_lineage={"checkpoint": "current"},
+        )
+    with pytest.raises(ArtifactValidationError, match="reader_validation_failed"):
+        evaluation.save_result_table(
+            pd.DataFrame({"value": [1]}),
+            tmp_path / "unknown.csv",
+            table_name="unknown_table",
+            cfg=cfg,
+            upstream_lineage={"parent": "current"},
+        )
+    with pytest.raises(ArtifactValidationError):
+        evaluation.save_json_result(
+            {"nonsense": True},
+            tmp_path / "cohort_manifest.json",
+            result_name="cohort_manifest",
+            cfg=cfg,
+            upstream_lineage={"admission": "current"},
+            artifact_kind="cohort_manifest",
+        )
