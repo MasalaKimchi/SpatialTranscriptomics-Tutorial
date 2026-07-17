@@ -7,14 +7,14 @@ findings:
   warning: 0
   info: 0
   total: 0
-resolved_findings: 5
+resolved_findings: 6
 ---
 
 # Phase 3 Code Review
 
 **Scope:** Implementation commits after verified plans (`8256f71..4915412`), all Phase 3 context/research/validation/pattern/plan/summary artifacts, the 14 changed production and test files, and the ordinary, foundation, AnnData, H5AD, and run-manifest call chains.
 
-**Result:** Clean after one fix and re-review iteration. All four warnings and the informational evidence defect are resolved, the affected regressions pass, and the canonical fast gate is green.
+**Result:** Clean after two fix and re-review iterations. All five warnings and the informational evidence defect are resolved, the affected regressions pass, and the canonical fast gate is green.
 
 ## Resolved Warning Findings
 
@@ -78,19 +78,37 @@ resolved_findings: 5
 
 **Resolution:** `3fc0ca1` asserts `ConfigValidationError`, verifies the `preprocessing.n_pcs` issue path, and independently proves the Scanpy import, AnnData copy, and seed sentinels remain untouched for both invalid configuration and invalid identity branches.
 
+## Resolved Warning Finding
+
+### WR-05 — Required-column detection executes caller-controlled equality hooks — Resolved
+
+**Evidence:** `projects/spatial-pharma-dl/src/identity.py:123-136` converts table columns to a tuple and then evaluates exact required names with `column not in columns`. The new persisted AnnData path repeats the same pattern at lines 451-466 with `"slide_id" in tuple(obs.columns)`. Python can fall back from the trusted string comparison to an arbitrary column label's `__eq__`, so neither boundary safely admits the schema before comparison. The subsequent `obs["slide_id"]` lookup would also hash/compare labels, but it is currently reached without first proving every column label is an exact built-in string.
+
+**Reproduction:** A pandas DataFrame with one custom `EvilColumn` label whose `__eq__` raises was supplied to each public boundary. `validate_anndata_spot_identity(..., require_slide_id=True)` and `align_labels_with_metadata(...)` both escaped as `AssertionError("column equality hook")` instead of raising structured `IdentityValidationError`; the hook call was recorded before any identity issue was returned.
+
+**Impact:** WR-03 closed hostile key-cell and parameter type rendering, but arbitrary table/AnnData schema labels can still execute caller-controlled code before admission. This violates the Phase 3 research rule that arbitrary identity inputs must not be hashed, compared, converted, or rendered before exact-type gates and leaves ordinary, foundation, label, and patch boundaries exposed through their shared schema checks.
+
+**Required fix:** Admit column labels by iterating once and checking `type(label) is str` before any equality, membership, hashing, sorting, or pandas lookup. Build the set/map only from admitted exact strings, reject non-exact labels with inert bounded schema evidence, then perform required/reserved-name checks and `obs["slide_id"]` access. Add custom-column-label adversaries for labels, metadata, optional raw AnnData, and required persisted AnnData; prove no `__eq__`, `__hash__`, `__repr__`, or metaclass naming hook executes.
+
+**Resolution:** `842e143` adds ordinal exact-type schema admission before any trusted-name comparison or pandas lookup. Label, metadata, optional raw AnnData, and required persisted AnnData adversaries now reject with structured inert `invalid_type` evidence without executing equality, hashing, repr, str, or metaclass naming hooks; exact-string missing/reserved issue ordering remains unchanged.
+
 ## Verification Performed
 
-- `python scripts/verify.py fast`: Ruff passed and all 230 strict offline tests passed in 21.46 seconds.
-- Reviewed the complete `8256f71..HEAD` production/test diff and all Phase 3 planning/evidence artifacts.
+- Reviewed the complete `8256f71..842e143` production/test/fix diff, `03-REVIEW-FIX.md`, and all Phase 3 planning/evidence artifacts.
 - Traced ordinary patch loading, foundation cache hit/miss, label and patch producers, preprocessing orchestration, H5AD restoration, and admitted-order manifest assembly.
-- Ran targeted read-only probes for persisted wrong-slide AnnData, impossible stage-count provenance, hostile custom-metaclass values, and oversized/control-character key diagnostics; all four reproduced the findings above.
+- Re-ran targeted read-only probes for persisted wrong-slide AnnData, impossible stage-count provenance, hostile custom-metaclass values, and oversized/control-character key diagnostics; all original warnings are closed.
 
 ## Fix and Re-review Verification
 
 - Focused adversarial re-review: 17 passed for persisted identity, metaclass hooks, bounded key diagnostics, impossible count histories, forged exclusions, and exact guard ordering.
-- Affected Phase 3 and boundary regression suite: 170 passed; scoped Ruff passed.
-- Canonical `python scripts/verify.py fast`: repository Ruff passed and all 250 strict offline tests passed in 21.39 seconds.
-- Static re-review confirmed label and patch persisted-source guards precede scientific work, all fixed-axis equalities are enforced by both resolver and manifest reconstruction, type diagnostics read no caller-class naming attributes, and exception rendering never embeds raw key controls or unbounded strings.
+- Independent focused Phase 3 modules: 93 passed in 18.43 seconds.
+- Canonical `python scripts/verify.py fast`: repository Ruff passed and all 250 strict offline tests passed in 21.19 seconds.
+- Independent read-only probes confirmed WR-01 through WR-04 are closed: wrong persisted slides raise `wrong_slide`; all three impossible fixed-axis histories are rejected; custom metaclass key values execute no naming hooks; and a 200,000-character/control-bearing key produces a bounded single-line diagnostic.
+- The same probe exposed WR-05 in both AnnData and table alignment schema paths despite the green suites.
+- Second-iteration WR-05 focused adversarial gate: 5 passed; label, metadata, optional raw AnnData, required persisted AnnData, and exact-string compatibility paths all passed.
+- Second-iteration affected Phase 3 and boundary regression suite: 177 passed; scoped Ruff passed.
+- Second-iteration canonical `python scripts/verify.py fast`: repository Ruff passed and all 255 strict offline tests passed in 20.49 seconds.
+- Static re-review confirmed `_schema_issues` and AnnData `slide_id` detection iterate and exact-type-admit every column label before required/reserved membership or `obs["slide_id"]` lookup.
 
 ## Positive Observations
 
@@ -102,4 +120,4 @@ resolved_findings: 5
 
 ## Review Conclusion
 
-Phase 3 is **clean** after the fix iteration. WR-01 through WR-04 and IN-01 are resolved with adversarial evidence, no new warning or informational finding was discovered in the affected call chains, and the phase is ready for independent verification.
+Phase 3 is **clean** after the second fix iteration. WR-01 through WR-05 and IN-01 are resolved with adversarial evidence, no warning or informational finding remains in the reviewed call chains, and the phase is ready for independent verification.
