@@ -2,7 +2,7 @@
 
 ## Overview
 
-This milestone adds a thin reliability spine beneath the existing notebook-first tutorial and pharma extension. Work proceeds from offline verification and validated inputs through durable artifacts, reproducible folds, leakage-free evaluation, image and label trust, and finally a reconciled environment contract. The sequence preserves existing notebook, CLI, configuration, output, and public-import surfaces while making scientific and serialized results explicit, safe, and reviewable.
+This milestone adds a focused reliability spine beneath the existing notebook-first tutorial and pharma extension. Work proceeds from offline verification and validated inputs through durable, lineage-aware artifacts. The sequence preserves existing notebook, CLI, configuration, output, and public-import surfaces while making the implemented validation and artifact guarantees explicit and reviewable.
 
 ## Phases
 
@@ -14,13 +14,7 @@ This milestone adds a thin reliability spine beneath the existing notebook-first
 - [x] **Phase 1: Offline Verification Harness** - Establish representative, tiered, CPU/offline evidence for every later reliability change. (completed 2026-07-17)
 - [x] **Phase 2: Validated Run and Cohort Admission** - Reject invalid experiments and resolve cohort membership before expensive work. (completed 2026-07-17)
 - [x] **Phase 3: Identity and Adaptive Preprocessing** - Guarantee sample alignment and scientifically viable post-QC dimensions. (completed 2026-07-17)
-- [ ] **Phase 4: Durable Artifact Contract** - Accept only fingerprint-matched, complete, schema-valid artifacts.
-- [ ] **Phase 5: Safe Cache and Checkpoint Formats** - Remove unsafe deserialization from supported patch and model artifact paths.
-- [ ] **Phase 6: Reproducible Fold Admission** - Make each LOSO fold deterministic, viable, and explicit about class coverage.
-- [ ] **Phase 7: Leakage-Free Evaluation** - Isolate model selection and learned preprocessing from every held-out slide.
-- [ ] **Phase 8: Image Reliability** - Normalize stains safely and preserve physical patch context with quality provenance.
-- [ ] **Phase 9: Trustworthy Heuristic Labels** - Make scientific labels evidence-backed, confidence-aware, and able to abstain.
-- [ ] **Phase 10: Reproducible Environment Contract** - Reconcile and verify the supported and locked execution environments.
+- [x] **Phase 4: Durable Artifact Contract** - Accept only fingerprint-matched, complete, schema-valid artifacts. (completed 2026-07-25)
 
 ## Phase Details
 
@@ -82,114 +76,16 @@ This milestone adds a thin reliability spine beneath the existing notebook-first
   3. Interrupted, truncated, stale, wrong-shape, wrong-schema, or incomplete artifacts are rejected by production readers and never promoted as valid results.
   4. Cache, model, table, and manifest publication uses same-filesystem temporary files, validation through the production reader, and atomic replacement with the completed manifest as commit marker.
 
-**Plans:** 3/3 plans executed
-
-### Phase 5: Safe Cache and Checkpoint Formats
-
-**Goal:** Maintainers can exchange patch caches and model checkpoints without supported readers executing serialized Python objects.
-**Mode:** mvp
-**Depends on:** Phase 4
-**Requirements:** ART-01, ART-02
-**Success Criteria** (what must be TRUE):
-
-  1. Patch arrays, compound identities, quality fields, and scalar metadata round-trip through numeric/string and JSON/tabular schemas loaded with `allow_pickle=False`.
-  2. Legacy object-valued patch caches fail closed without object deserialization and provide precise regeneration guidance.
-  3. Model state loads with `weights_only=True`, while separate safe metadata is validated for schema, model identity, expected keys, tensor shapes, and dtypes.
-  4. Legacy or malformed checkpoint artifacts are rejected on normal execution paths without an unsafe compatibility fallback.
-
-**Plans:** TBD
-
-### Phase 6: Reproducible Fold Admission
-
-**Goal:** Maintainers can create LOSO folds that are reproducible, training-viable, and explicit about held-out class coverage before fitting begins.
-**Mode:** mvp
-**Depends on:** Phases 1, 3, and 5
-**Requirements:** REPRO-01, EVAL-02
-**Success Criteria** (what must be TRUE):
-
-  1. One seeding API deterministically derives and applies Python, NumPy, PyTorch CPU/CUDA, data-loader generator, and worker seeds for each run and fold.
-  2. Strict, best-effort, and disabled deterministic-backend policies have documented behavior and record seeds, backend flags, hardware, threads, and approved exceptions.
-  3. Every LOSO fold reports training and test sample/class counts before training, and degenerate training support fails with the affected fold and classes.
-  4. Classes present only in the held-out slide remain evaluable through an explicit unseen-class coverage metric instead of being silently dropped or conflated with ordinary accuracy.
-
-**Plans:** TBD
-
-### Phase 7: Leakage-Free Evaluation
-
-**Goal:** Maintainers can evaluate CNN and RF models knowing that no held-out slide influenced selection or fitted preprocessing state.
-**Mode:** mvp
-**Depends on:** Phases 5 and 6
-**Requirements:** EVAL-01, EVAL-03, EVAL-04
-**Success Criteria** (what must be TRUE):
-
-  1. Inner model selection uses only slide-disjoint outer-training partitions or a predeclared training-only policy, and the frozen model evaluates the outer slide once after selection.
-  2. Perturbing only held-out labels, targets, or features cannot change selected epochs, hyperparameters, training-only stain/scaler/imputer state, or feature schema.
-  3. Regression scaling is fitted on outer-training observations only, preserves missing-target masks and target order, and restores predictions to original report units.
-  4. RF features are reindexed to a training-defined schema and transformed by an imputer fitted only on outer-training rows, with explicit handling for missing or extra columns.
-  5. Fold artifacts expose fit slide IDs and selection lineage proving disjointness from the outer-test slide.
-
-**Plans:** TBD
-
-### Phase 8: Image Reliability
-
-**Goal:** Maintainers can produce fixed-context patches whose stain transformation and quality decisions are valid, comparable, and provenance-rich.
-**Mode:** mvp
-**Depends on:** Phases 4 and 6
-**Requirements:** IMG-01, IMG-02, IMG-03
-**Success Criteria** (what must be TRUE):
-
-  1. Grayscale, RGBA, invalid-range, non-finite, low-tissue, low-rank, or numerically invalid Macenko inputs deterministically fail or use the configured fallback with quality metrics and a recorded reason.
-  2. Each normalized patch distinguishes its validated source stain matrix from a shared target matrix fitted only from the declared allowed scope or identified by an external checksum.
-  3. Controlled cross-slide fixtures show reduced color-statistic distance after shared-reference normalization without changing patch shape or spatial layout.
-  4. Border spots preserve the configured native field of view through explicit padding rather than stretching, and synchronized metadata records bounds, padding fraction/mask, tissue fraction, blur/artifact flags, acceptance, and rejection reason.
-  5. A configurable quality gate reports pre/post-filter counts and cannot silently create an unsupported fold.
-
-**Plans:** TBD
-
-### Phase 9: Trustworthy Heuristic Labels
-
-**Goal:** Maintainers can interpret heuristic domain labels as versioned evidence with confidence and abstention rather than unqualified biological ground truth.
-**Mode:** mvp
-**Depends on:** Phases 3, 4, and 6
-**Requirements:** LABEL-01
-**Success Criteria** (what must be TRUE):
-
-  1. Label generation uses exact normalized gene symbols and a versioned rule set with recorded scoring, thresholds, evidence, and preprocessing provenance.
-  2. Each label result distinguishes positive evidence, low confidence, insufficient evidence, out-of-scope biology, and abstention instead of forcing an assignment.
-  3. Confidence, rule version, evidence, and abstention reason survive safe serialization, one-to-one alignment, quality filtering, training inputs, and reports.
-  4. Maintainers can inspect threshold-sensitivity and label-noise summaries with retained denominators and renewed fold-support validation after abstention.
-
-**Plans:** TBD
-
-### Phase 10: Reproducible Environment Contract
-
-**Goal:** Maintainers can install and verify the tutorial from declarations that agree on one supported Python policy and one exact reference environment.
-**Mode:** mvp
-**Depends on:** Phases 1-9
-**Requirements:** ENV-01
-**Success Criteria** (what must be TRUE):
-
-  1. `pyproject.toml`, requirements files, Conda configuration, CI, notebooks, and documentation agree on the supported Python version and dependency partitions.
-  2. Maintainers can create a hash-pinned reference environment from scratch and run the applicable fast reliability gates in it.
-  3. CI mechanically detects drift between the authoritative support policy and committed environment declarations and verifies the declared minimum-supported and locked reference environments.
-  4. Run provenance records the solved environment and platform, while optional network, accelerator, and full-cohort dependencies remain explicit tiers rather than default requirements.
-
-**Plans:** TBD
+**Plans:** 4/4 plans complete
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10.
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Offline Verification Harness | 3/3 | Complete    | 2026-07-17 |
-| 2. Validated Run and Cohort Admission | 4/4 | Complete    | 2026-07-17 |
-| 3. Identity and Adaptive Preprocessing | 3/3 | Complete    | 2026-07-17 |
-| 4. Durable Artifact Contract | 3/3 | In Progress |  |
-| 5. Safe Cache and Checkpoint Formats | 0/TBD | Not started | - |
-| 6. Reproducible Fold Admission | 0/TBD | Not started | - |
-| 7. Leakage-Free Evaluation | 0/TBD | Not started | - |
-| 8. Image Reliability | 0/TBD | Not started | - |
-| 9. Trustworthy Heuristic Labels | 0/TBD | Not started | - |
-| 10. Reproducible Environment Contract | 0/TBD | Not started | - |
+| 1. Offline Verification Harness | 3/3 | Complete | 2026-07-17 |
+| 2. Validated Run and Cohort Admission | 4/4 | Complete | 2026-07-17 |
+| 3. Identity and Adaptive Preprocessing | 3/3 | Complete | 2026-07-17 |
+| 4. Durable Artifact Contract | 4/4 | Complete | 2026-07-25 |

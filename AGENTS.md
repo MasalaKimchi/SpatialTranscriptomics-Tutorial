@@ -4,17 +4,17 @@
 
 **Spatial Transcriptomics Tutorial Reliability Upgrade**
 
-This repository is a notebook-first spatial transcriptomics tutorial with an optional pharma-facing deep-learning extension for predicting tumor-microenvironment molecular state from H&E patches. This milestone strengthens the existing implementation through exactly 20 high-priority correctness, security, reproducibility, validation, and test-infrastructure improvements while preserving its educational workflow and public outputs.
+This repository is a notebook-first spatial transcriptomics tutorial with an optional pharma-facing deep-learning extension for predicting tumor-microenvironment molecular state from H&E patches. The completed four-phase milestone strengthens validation, artifact provenance, and offline verification while preserving the educational workflow and public outputs.
 
 **Core Value:** Reported spatial and machine-learning results must be scientifically trustworthy, reproducible, and produced from validated artifacts without hidden data leakage.
 
 ### Constraints
 
 - **Behavioral compatibility**: Keep notebook order, documented CLI entry points, config keys, output names, and public Python exports stable unless a security-safe artifact migration is explicitly documented.
-- **Scientific validity**: All learned preprocessing, model selection, imputation, and scaling must use training data only within each outer fold.
+- **Scientific interpretation**: The optional pharma extension is educational/research-oriented and does not claim leakage-free model selection or train-only learned transforms.
 - **Offline tests**: Default automated tests must not download datasets or model weights.
 - **Resource budget**: Fast CI must remain CPU-compatible; network and full-cohort tests are opt-in tiers.
-- **Security**: Untrusted cache and checkpoint reads must not execute Python objects.
+- **Security boundary**: Patch caches and checkpoints are trusted-local artifacts only; never load untrusted cache or checkpoint files.
 - **Traceability**: Every improvement maps to one requirement, targeted tests, and a reviewable GSD phase/commit.
 
 <!-- GSD:project-end -->

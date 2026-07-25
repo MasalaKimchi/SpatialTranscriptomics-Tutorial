@@ -325,7 +325,7 @@ def test_verification_documentation_contract() -> None:
             "safe fixture round trips do not certify production "
             "cache/checkpoint migration"
         ) in documentation
-        assert "later phases" in documentation
-        assert "same marker/fixture/runner convention" in documentation
+        assert "trusted-local compatibility artifacts" in documentation
+        assert "do not load them from untrusted sources" in documentation
         assert "child python interpreters" in documentation
         assert "not an operating-system sandbox" in documentation

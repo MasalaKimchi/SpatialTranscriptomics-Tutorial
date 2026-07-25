@@ -2,41 +2,41 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 4 deep review fixes complete; independent verification next
-last_updated: "2026-07-17T10:30:00.000Z"
-last_activity: 2026-07-17
+status: complete
+stopped_at: Milestone finalized after Phase 4
+last_updated: "2026-07-25T07:30:00.000Z"
+last_activity: 2026-07-25
 progress:
-  total_phases: 10
-  completed_phases: 3
-  total_plans: 13
-  completed_plans: 13
-  percent: 30
+  total_phases: 4
+  completed_phases: 4
+  total_plans: 14
+  completed_plans: 14
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-17)
+See: .planning/PROJECT.md (updated 2026-07-25)
 
 **Core value:** Reported spatial and machine-learning results must be scientifically trustworthy, reproducible, and produced from validated artifacts without hidden data leakage.
-**Current focus:** Phase 4 — Durable Artifact Contract
+**Current focus:** Milestone complete — project ends after Phase 4
 
 ## Current Position
 
 Phase: 4
-Plan: 3 of 3 in current phase
-Status: Deep review clean after eight warning fixes; ready for independent verification
-Last activity: 2026-07-17
+Plan: 4 of 4 in final phase
+Status: Complete; final verification and owner-approved scope closure recorded
+Last activity: 2026-07-25
 
-Progress: [███░░░░░░░] 30%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 13
+- Total plans completed: 14
 - Average duration: 13 min
 - Total execution time: 2.5 hours
 
@@ -47,6 +47,7 @@ Progress: [███░░░░░░░] 30%
 | 01 | 3 | 20 min | 7 min |
 | 02 | 4 | 30 min | 8 min |
 | 03 | 3 | 56 min | 19 min |
+| 04 | 4 | 56 min | 14 min |
 
 **Recent Trend:**
 
@@ -67,6 +68,7 @@ Progress: [███░░░░░░░] 30%
 | Phase 04 P01 | 16min | 3 tasks | 3 files |
 | Phase 04 P02 | 13min | 3 tasks | 13 files |
 | Phase 04 P03 | 27min | 3 tasks | 16 files |
+| Phase 04 P04 | 14min | gap closure and independent review | 22 files |
 
 ## Accumulated Context
 
@@ -74,7 +76,7 @@ Progress: [███░░░░░░░] 30%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 
-- [Roadmap]: Exactly 20 v1 requirements are assigned once across 10 fine-grained MVP phases.
+- [Roadmap]: The owner ended the milestone after Phase 4; the final scope contains eight implemented requirements across four phases.
 - [Roadmap]: Verification fixtures precede contract and scientific refactors; unsafe artifact migrations use the shared manifest/atomic foundation.
 - [Roadmap]: Existing notebook, CLI, configuration, output, and public-import surfaces remain stable.
 - [Phase 01]: Bare pytest selects offline evidence; only explicit network and full_cohort selections enable sockets. — Fail-closed defaults preserve offline evidence while retaining deliberate external-tier opt-ins.
@@ -90,7 +92,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 02]: Remote admission remains provisional until complete source outcomes are known. — Only final admission may publish the cohort manifest or release downstream stages.
 - [Phase 02]: Admission is the sole partial-cohort policy for downstream helpers. — Data, label, stain, patch, and benchmark stages consume one ordered admitted sequence or fail visibly.
 - [Phase 02]: Stage errors expose only bounded primitive cardinality evidence before expensive work. — Stable diagnostics close VAL-03 without capturing scientific objects or host-local state.
-- [Phase 02]: LOSO entry points require two unique non-empty slides but no class-support policy. — Phase 2 owns cardinality while Phase 6 owns class viability and unseen-class coverage.
+- [Phase 02]: LOSO entry points require two unique non-empty slides but no class-support policy. — Phase 2 owns cardinality; detailed class viability and unseen-class coverage are outside the final milestone.
 - [Phase 02]: Every public stage rechecks cardinality after cohort admission. — Direct callers and partially admitted downstream subsets must fail before expensive work.
 - [Phase 02]: Zero-row alignment reports cardinality only. — Compound-key diagnosis and repair remain explicitly owned by Phase 3.
 - [Phase 02]: Configuration admits exact safe built-in types before caller value operations. — Hostile subclasses and arbitrary mappings must fail deterministically without executing overrides.
@@ -104,12 +106,12 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 04]: Artifact state is canonical JSON behind immutable records. — Fresh exact-built-in views prevent caller mutation while keeping the generic layer import-light.
 - [Phase 04]: Artifact kinds use explicit projection allowlists and contract versions. — Scientific lineage changes invalidate deterministically without presentation-only churn.
 - [Phase 04]: Temporary validation uses the final logical basename and exact reuse reader. — Validated sidecar bytes remain unchanged when the payload and manifest move to final names.
-- [Phase 04]: Checksums do not authenticate pickle-bearing formats. — Phase 5 remains responsible for removing unsafe patch and checkpoint deserialization.
+- [Phase 04]: Checksums do not authenticate pickle-bearing formats. — Patch caches and checkpoints remain trusted-local-only artifacts in the finalized project.
 - [Phase 04]: Cache-only source identity never claims to detect an unobserved remote mutation. — Stable provider/sample identity is always fingerprinted and observed content is included only when it can be supplied again.
 - [Phase 04]: Scientific readers validate manifest-declared schemas after generic byte admission. — A valid checksum cannot bless wrong axes, rows, dtypes, identity, dimensions, or provenance.
-- [Phase 04]: Legacy object patch archives are admitted only as local-writer output. — Generic admission precedes decoding, and Phase 5 remains the required safe-format migration boundary.
+- [Phase 04]: Legacy object patch archives are admitted only as local-writer output. — Generic admission precedes decoding; untrusted archives are outside the supported boundary.
 - [Phase 04]: Semantic corruption is not an automatic cache miss. — Acquisition may rebuild missing, legacy, or stale artifacts while checksum-valid reader failures remain visible.
-- [Phase 04]: Checkpoint compatibility remains local-writer-only until Phase 5. — Contract admission and checksums establish integrity and lineage, not hostile pickle authenticity.
+- [Phase 04]: Checkpoint compatibility is local-writer-only. — Contract admission and checksums establish integrity and lineage, not hostile pickle authenticity.
 - [Phase 04]: Every retained runner and generated-notebook scientific table uses a named adapter. — Static inventory rejects new raw-I/O or filename-only reuse seams without broad directory exemptions.
 - [Phase 04]: Sidecar expectation reads share the bounded regular-file manifest path. — Reconstructing an expected fingerprint cannot bypass sidecar size, symlink, or generation checks.
 
@@ -119,7 +121,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- Full-cohort and network validation remain explicit later evidence tiers; default planning and CI must stay CPU/offline.
+- Full-cohort and network validation remain explicit opt-in evidence tiers; default CI stays CPU/offline.
+- Patch cache and checkpoint files must originate locally from this repository; untrusted serialized files are unsupported.
 
 ## Deferred Items
 
@@ -129,6 +132,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T09:56:05.000Z
-Stopped at: Completed 04-03-PLAN.md
+Last session: 2026-07-25
+Stopped at: Milestone finalized after Phase 4
 Resume file: None

@@ -103,10 +103,11 @@ python -m ruff check utils scripts projects/spatial-pharma-dl/src projects/spati
 python -m pytest -q --strict-markers -m offline projects/spatial-pharma-dl/tests
 ```
 
-Safe fixture round trips do not certify production cache/checkpoint migration;
-that security migration has separate evidence in its owning phase. Later phases
-extend the same marker/fixture/runner convention instead of creating parallel
-verification entry points.
+Safe fixture round trips do not certify production cache/checkpoint migration.
+Patch caches and model checkpoints remain trusted-local compatibility artifacts:
+do not load them from untrusted sources. This finalized milestone validates
+their lineage and structure but does not migrate them to hostile-input-safe
+serialization.
 
 The offline guard blocks Python socket connection and name-resolution APIs in
 the pytest process and in child Python interpreters that inherit the harness
